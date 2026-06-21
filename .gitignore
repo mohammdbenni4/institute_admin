@@ -1,0 +1,13 @@
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local env files (each subproject keeps its own .env)
+.env
+.env.*
+!.env.example
+
+# Local Claude Code settings
+.claude/settings.local.json

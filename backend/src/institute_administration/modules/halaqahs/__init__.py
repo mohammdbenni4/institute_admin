@@ -1,0 +1,1 @@
+"""Halaqahs bounded context (الحلقات)."""

@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		--background: 120 20% 98%;
+		--foreground: 160 10% 15%;
+
+		--card: 0 0% 100%;
+		--card-foreground: 160 10% 15%;
+
+		--popover: 0 0% 100%;
+		--popover-foreground: 160 10% 15%;
+
+		--primary: 152 45% 38%;
+		--primary-foreground: 0 0% 100%;
+
+		--secondary: 150 15% 93%;
+		--secondary-foreground: 160 10% 25%;
+
+		--muted: 140 10% 95%;
+		--muted-foreground: 160 5% 50%;
+
+		--accent: 155 35% 90%;
+		--accent-foreground: 152 45% 25%;
+
+		--destructive: 0 72% 51%;
+		--destructive-foreground: 0 0% 100%;
+
+		--border: 140 10% 90%;
+		--input: 140 10% 90%;
+		--ring: 152 45% 38%;
+
+		--radius: 0.75rem;
+
+		--success: 152 60% 40%;
+		--success-foreground: 0 0% 100%;
+		--warning: 38 92% 50%;
+		--warning-foreground: 0 0% 100%;
+		--info: 210 80% 52%;
+		--info-foreground: 0 0% 100%;
+
+		--sidebar-background: 152 25% 18%;
+		--sidebar-foreground: 140 15% 90%;
+		--sidebar-primary: 152 50% 50%;
+		--sidebar-primary-foreground: 0 0% 100%;
+		--sidebar-accent: 152 20% 25%;
+		--sidebar-accent-foreground: 140 15% 95%;
+		--sidebar-border: 152 15% 25%;
+		--sidebar-ring: 152 50% 50%;
+	}
+}
+
+@layer base {
+	* {
+		@apply border-border;
+	}
+
+	body {
+		@apply bg-background text-foreground font-cairo antialiased;
+		direction: rtl;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		@apply font-cairo font-bold;
+	}
+}
+
+@layer utilities {
+	.glass-card {
+		@apply bg-card rounded-2xl shadow-sm border border-border/50;
+	}
+
+	.kpi-card {
+		@apply glass-card p-5 transition-all duration-200 hover:shadow-md;
+	}
+
+	.page-container {
+		@apply p-4 md:p-6 lg:p-8 space-y-6;
+	}
+
+	.section-title {
+		@apply text-lg font-bold text-foreground;
+	}
+}
+
+/* Printable report: hidden on screen, the only thing shown when printing. */
+@media screen {
+	#print-report {
+		display: none;
+	}
+}
+
+@media print {
+	body * {
+		visibility: hidden;
+	}
+	#print-report,
+	#print-report * {
+		visibility: visible;
+	}
+	#print-report {
+		position: absolute;
+		inset: 0;
+		padding: 1.5rem;
+		direction: rtl;
+	}
+}

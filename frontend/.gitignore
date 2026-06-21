@@ -1,0 +1,16 @@
+node_modules/
+
+# SvelteKit / Vite build output
+.svelte-kit/
+build/
+.vercel/
+.netlify/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs & misc
+*.log
+.DS_Store

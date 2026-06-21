@@ -1,0 +1,25 @@
+# Local PostgreSQL for development.
+# Requires Docker (not installed on this machine yet). If you use the locally
+# installed PostgreSQL 16 instead, you can ignore this file and use the
+# `postgres` role/database per the commands in the README.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: institute-administration-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: institute_administration
+    ports:
+      - "5432:5432"
+    volumes:
+      - institute_administration_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d institute_administration"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  institute_administration_pgdata:

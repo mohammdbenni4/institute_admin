@@ -1,0 +1,1 @@
+"""Teachers bounded context (المعلمون)."""
