@@ -11,3 +11,6 @@
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# graphify code knowledge graph — regenerated for free with `graphify update .`
+graphify-out/
