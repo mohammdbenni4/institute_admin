@@ -10,6 +10,7 @@ import type {
 	Halaqah,
 	Paginated,
 	PageParams,
+	Problem,
 	ScoringSettings,
 	Student,
 	Teacher,
@@ -53,4 +54,8 @@ export const dailyRecordsApi = {
 
 export const scoringApi = {
 	get: () => api.get<ScoringSettings>('/scoring-settings')
+};
+
+export const problemsApi = {
+	list: (params?: PageParams) => api.get<Paginated<Problem>>(`/problems${qs(params)}`)
 };

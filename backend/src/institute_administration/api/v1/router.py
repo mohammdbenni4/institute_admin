@@ -10,6 +10,7 @@ from institute_administration.modules.daily_records.router import router as dail
 from institute_administration.modules.halaqah_types.router import router as halaqah_types_router
 from institute_administration.modules.halaqahs.router import router as halaqahs_router
 from institute_administration.modules.identity.router import auth_router, users_router
+from institute_administration.modules.problems.router import router as problems_router
 from institute_administration.modules.scoring.router import router as scoring_router
 from institute_administration.modules.students.router import router as students_router
 from institute_administration.modules.teachers.router import router as teachers_router
@@ -25,6 +26,7 @@ api_router.include_router(students_router)
 api_router.include_router(halaqahs_router)
 api_router.include_router(halaqah_types_router)
 api_router.include_router(times_router)
+api_router.include_router(problems_router)
 api_router.include_router(daily_records_router)
 api_router.include_router(analytics_router)
 api_router.include_router(scoring_router)

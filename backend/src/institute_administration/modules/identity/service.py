@@ -23,6 +23,7 @@ from institute_administration.modules.identity.domain import (
     InactiveUserError,
     InvalidCredentialsError,
     Page,
+    RawPassword,
     User,
     UserNotFoundError,
     UserRepository,
@@ -70,7 +71,7 @@ class UserService:
         user = User.create(
             full_name=data.full_name,
             email=data.email,
-            password_hash=hash_password(data.password),
+            password_hash=hash_password(RawPassword(data.password).value),
             role=data.role,
             date_of_birth=data.date_of_birth,
             is_active=data.is_active,
@@ -97,7 +98,7 @@ class UserService:
         if data.full_name is not UNSET:
             user.rename(data.full_name)
         if data.password is not UNSET:
-            user.set_password_hash(hash_password(data.password))
+            user.set_password_hash(hash_password(RawPassword(data.password).value))
         if data.role is not UNSET:
             user.change_role(data.role)
         if data.date_of_birth is not UNSET:

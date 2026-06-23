@@ -47,9 +47,9 @@ export const RATING_LABELS: Record<Rating, string> = {
 };
 
 export const ATTITUDE_LABELS: Record<Attitude, string> = {
-	3: 'ممتاز',
-	2: 'جيد',
-	1: 'مقبول'
+	3: 'مؤدب',
+	2: 'متوسط',
+	1: 'مشاغب'
 };
 
 export function ratingLabel(r: Rating | null | undefined): string {

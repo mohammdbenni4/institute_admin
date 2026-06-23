@@ -64,6 +64,28 @@ class StudentService:
         await self._students.add(student)
         return await self.get(student.id)
 
+    async def create_many(self, items: list[CreateStudentInput]) -> int:
+        """Create many students in the current unit of work. Returns the count.
+
+        All rows share the request transaction, so the import is atomic: if any
+        row violates a constraint the whole batch is rolled back.
+        """
+        for data in items:
+            student = Student.create(
+                full_name=data.full_name,
+                father_name=data.father_name,
+                father_number=data.father_number,
+                date_of_birth=data.date_of_birth,
+                mother_number=data.mother_number,
+                orphan_of=data.orphan_of,
+                residential_area=data.residential_area,
+                accepted_at=data.accepted_at,
+                notes=data.notes,
+                halaqah_id=data.halaqah_id,
+            )
+            await self._students.add(student)
+        return len(items)
+
     async def get(self, student_id: UUID) -> Student:
         student = await self._students.get_by_id(student_id)
         if student is None:

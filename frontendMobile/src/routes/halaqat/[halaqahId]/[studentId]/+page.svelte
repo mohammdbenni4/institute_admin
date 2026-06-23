@@ -5,10 +5,12 @@
 		ApiError,
 		auth,
 		dailyRecordsApi,
+		problemsApi,
 		scoringApi,
 		studentsApi,
 		type DailyRecord,
 		type DailyRecordCreate,
+		type Problem,
 		type Rating,
 		type Attitude,
 		type ScoringSettings,
@@ -34,6 +36,7 @@
 
 	interface FormState {
 		present: boolean;
+		excused: boolean;
 		exam_from: string;
 		exam_to: string;
 		exam_total: string;
@@ -45,11 +48,13 @@
 		attitude: number | null;
 		added_points: number | null;
 		notes: string;
+		problem_ids: string[];
 	}
 
 	function blankForm(): FormState {
 		return {
 			present: true,
+			excused: false,
 			exam_from: '',
 			exam_to: '',
 			exam_total: '',
@@ -60,13 +65,15 @@
 			problems: '',
 			attitude: null,
 			added_points: 0,
-			notes: ''
+			notes: '',
+			problem_ids: []
 		};
 	}
 
 	function toForm(r: DailyRecord): FormState {
 		return {
 			present: r.present,
+			excused: r.excused,
 			exam_from: r.exam_from?.toString() ?? '',
 			exam_to: r.exam_to?.toString() ?? '',
 			exam_total: r.exam_total?.toString() ?? '',
@@ -77,7 +84,8 @@
 			problems: r.problems ?? '',
 			attitude: r.attitude,
 			added_points: r.added_points,
-			notes: r.notes ?? ''
+			notes: r.notes ?? '',
+			problem_ids: r.tagged_problems.map((p) => p.id)
 		};
 	}
 
@@ -88,6 +96,21 @@
 	let student = $state<Student | null>(null);
 	let records = $state<DailyRecord[]>([]);
 	let settings = $state<ScoringSettings | null>(null);
+	let allProblems = $state<Problem[]>([]);
+
+	// group problems by level for the picker
+	const problemsByLevel = $derived(() => {
+		const map = new Map<string, { levelName: string; items: Problem[] }>();
+		for (const p of allProblems) {
+			const existing = map.get(p.level_id);
+			if (existing) {
+				existing.items.push(p);
+			} else {
+				map.set(p.level_id, { levelName: p.level_name, items: [p] });
+			}
+		}
+		return [...map.values()];
+	});
 
 	let date = $state(today);
 	let form = $state<FormState>(blankForm());
@@ -108,7 +131,9 @@
 		computeScores(
 			{
 				present: form.present,
+				excused: form.excused,
 				rating: form.rating,
+				revision_rating: form.revision_rating,
 				attitude: form.attitude,
 				added_points: form.added_points ?? 0
 			},
@@ -129,14 +154,16 @@
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
-			const [s, history, scoring] = await Promise.all([
+			const [s, history, scoring, probs] = await Promise.all([
 				studentsApi.get(studentId),
 				dailyRecordsApi.list({ student_id: studentId, limit: 90 }),
-				scoringApi.get().catch(() => null)
+				scoringApi.get().catch(() => null),
+				problemsApi.list({ limit: 500 }).catch(() => ({ items: [] as Problem[] }))
 			]);
 			student = s;
 			records = history.items;
 			settings = scoring;
+			allProblems = probs.items;
 			status = 'ready';
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : 'تعذّر تحميل بيانات الطالب';
@@ -163,8 +190,10 @@
 
 	function payloadBase() {
 		const present = form.present;
+		const excused = !present && form.excused;
 		return {
 			present,
+			excused,
 			record_date: date,
 			added_points: form.added_points ?? 0,
 			notes: orNull(form.notes),
@@ -176,8 +205,18 @@
 			revision_rating: present ? ((form.revision_rating as Rating | null) ?? null) : null,
 			homework: present ? orNull(form.homework) : null,
 			problems: present ? orNull(form.problems) : null,
-			attitude: present ? ((form.attitude as Attitude | null) ?? null) : null
+			attitude: present ? ((form.attitude as Attitude | null) ?? null) : null,
+			problem_ids: present ? form.problem_ids : []
 		};
+	}
+
+	function toggleProblem(id: string) {
+		const idx = form.problem_ids.indexOf(id);
+		if (idx === -1) {
+			form.problem_ids = [...form.problem_ids, id];
+		} else {
+			form.problem_ids = form.problem_ids.filter((x) => x !== id);
+		}
 	}
 
 	function flash(type: 'ok' | 'err', text: string) {
@@ -310,10 +349,13 @@
 			class="space-y-4 rounded-[2rem] border border-white/60 bg-surface-container-lowest p-5 shadow-card"
 		>
 			<Field label="الحضور" icon="how_to_reg">
-				<div class="grid grid-cols-2 gap-2">
+				<div class="grid grid-cols-3 gap-2">
 					<button
 						type="button"
-						onclick={() => (form.present = true)}
+						onclick={() => {
+							form.present = true;
+							form.excused = false;
+						}}
 						class={'rounded-full border py-2.5 text-xs font-bold transition active:scale-95 ' +
 							(form.present
 								? 'border-primary bg-primary text-on-primary shadow-sm'
@@ -323,9 +365,25 @@
 					</button>
 					<button
 						type="button"
-						onclick={() => (form.present = false)}
+						onclick={() => {
+							form.present = false;
+							form.excused = true;
+						}}
 						class={'rounded-full border py-2.5 text-xs font-bold transition active:scale-95 ' +
-							(!form.present
+							(!form.present && form.excused
+								? 'border-[#1a73e8] bg-[#1a73e8] text-white shadow-sm'
+								: 'border-outline-variant/30 bg-white/70 text-on-surface-variant')}
+					>
+						أذن
+					</button>
+					<button
+						type="button"
+						onclick={() => {
+							form.present = false;
+							form.excused = false;
+						}}
+						class={'rounded-full border py-2.5 text-xs font-bold transition active:scale-95 ' +
+							(!form.present && !form.excused
 								? 'border-error bg-error text-on-error shadow-sm'
 								: 'border-outline-variant/30 bg-white/70 text-on-surface-variant')}
 					>
@@ -340,6 +398,9 @@
 					<div class="flex flex-wrap gap-2 pt-1 text-[10px] text-on-surface-variant/60">
 						<span>حضور {scores.present}</span>
 						<span>· تسميع {scores.exam}</span>
+						{#if scores.revision > 0 || form.revision_rating != null}
+							<span>· مراجعة {scores.revision}</span>
+						{/if}
 						<span>· أدب {scores.attitude}</span>
 						<span>· إضافية {form.added_points ?? 0}</span>
 					</div>
@@ -402,13 +463,42 @@
 					/>
 				</Field>
 
-				<Field label="الصعوبات" icon="report">
+				<Field label="ملاحظات الصعوبات" icon="report">
 					<input
 						bind:value={form.problems}
 						placeholder="مثال: ضعف في مخارج الحروف"
 						class="w-full rounded-2xl bg-surface-container-low px-4 py-3 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
 					/>
 				</Field>
+
+				{#if problemsByLevel().length > 0}
+					<Field label="الصعوبات المحددة" icon="label">
+						<div class="space-y-3">
+							{#each problemsByLevel() as group}
+								<div>
+									<p class="mb-1.5 text-[11px] font-semibold text-on-surface-variant/70">
+										{group.levelName}
+									</p>
+									<div class="flex flex-wrap gap-2">
+										{#each group.items as p (p.id)}
+											{@const selected = form.problem_ids.includes(p.id)}
+											<button
+												type="button"
+												onclick={() => toggleProblem(p.id)}
+												class={'rounded-full border px-3 py-1 text-xs font-medium transition active:scale-95 ' +
+													(selected
+														? 'border-primary bg-primary text-on-primary shadow-sm'
+														: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant')}
+											>
+												{p.name}
+											</button>
+										{/each}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</Field>
+				{/if}
 
 				<Field label="الأدب" icon="volunteer_activism">
 					<PillGroup bind:value={form.attitude} options={ATTITUDE_OPTIONS} />
@@ -460,9 +550,16 @@
 								<div class="flex items-center gap-3">
 									<div
 										class={'flex h-9 w-9 items-center justify-center rounded-full ' +
-											(r.present ? 'bg-primary/10 text-primary' : 'bg-error/10 text-error')}
+											(r.present
+												? 'bg-primary/10 text-primary'
+												: r.excused
+													? 'bg-blue-100 text-blue-600'
+													: 'bg-error/10 text-error')}
 									>
-										<Icon name={r.present ? 'check' : 'close'} class="text-lg" />
+										<Icon
+											name={r.present ? 'check' : r.excused ? 'event_available' : 'close'}
+											class="text-lg"
+										/>
 									</div>
 									<div class="flex flex-col">
 										<span class="text-[13px] font-bold text-on-surface"

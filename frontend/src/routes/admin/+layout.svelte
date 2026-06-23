@@ -4,7 +4,9 @@
 	import RoleLayout, { type NavItem } from '$lib/components/shared/RoleLayout.svelte';
 	import { auth, isSuperAdmin, loadCurrentUser } from '$lib/api/auth.svelte';
 	import {
+		AlertTriangle,
 		BookOpen,
+		CalendarCheck,
 		Clock,
 		GraduationCap,
 		LayoutDashboard,
@@ -34,10 +36,12 @@
 		{ label: 'المستخدمون', href: '/admin/users', icon: Users },
 		{ label: 'المعلمون', href: '/admin/teachers', icon: UserCheck },
 		{ label: 'الطلاب', href: '/admin/students', icon: GraduationCap },
+		{ label: 'الحضور والغياب', href: '/admin/attendance', icon: CalendarCheck },
 		{ label: 'الحلقات', href: '/admin/halaqahs', icon: BookOpen },
 		{ label: 'أنواع الحلقات', href: '/admin/halaqah-types', icon: Layers },
 		{ label: 'الأوقات', href: '/admin/times', icon: Clock },
-		{ label: 'إعدادات النقاط', href: '/admin/scoring', icon: SlidersHorizontal }
+		{ label: 'إعدادات النقاط', href: '/admin/scoring', icon: SlidersHorizontal },
+		{ label: 'الصعوبات', href: '/admin/problems', icon: AlertTriangle }
 	];
 </script>
 

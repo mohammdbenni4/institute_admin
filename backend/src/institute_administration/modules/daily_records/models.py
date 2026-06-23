@@ -33,6 +33,7 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "daily_records"
     __table_args__ = (
         UniqueConstraint("student_id", "record_date"),
+        CheckConstraint("NOT (present AND excused)", name="excused_requires_absent"),
         CheckConstraint("rating IS NULL OR rating BETWEEN 1 AND 4", name="rating_range"),
         CheckConstraint(
             "revision_rating IS NULL OR revision_rating BETWEEN 1 AND 4",
@@ -65,6 +66,7 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     record_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     present: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    excused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     exam_from: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     exam_to: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
@@ -81,5 +83,25 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Denormalised, domain-derived reward-card scores.
     card_present: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     card_exam: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    card_revision: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     card_attitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     total_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+
+class DailyRecordProblemModel(Base):
+    """Junction table linking a daily record to its tagged problems."""
+
+    __tablename__ = "daily_record_problems"
+
+    daily_record_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("daily_records.id", ondelete="CASCADE"),
+        nullable=False,
+        primary_key=True,
+    )
+    problem_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("problems.id", ondelete="CASCADE"),
+        nullable=False,
+        primary_key=True,
+    )

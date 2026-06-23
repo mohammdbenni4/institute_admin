@@ -17,9 +17,15 @@ class ScoringSettingsResponse(BaseModel):
     rating_3_points: int
     rating_2_points: int
     rating_1_points: int
+    revision_4_points: int
+    revision_3_points: int
+    revision_2_points: int
+    revision_1_points: int
     attitude_3_points: int
     attitude_2_points: int
     attitude_1_points: int
+    absent_points: int
+    excused_points: int
 
 
 class ScoringSettingsUpdate(BaseModel):
@@ -30,9 +36,15 @@ class ScoringSettingsUpdate(BaseModel):
     rating_3_points: int = _Points
     rating_2_points: int = _Points
     rating_1_points: int = _Points
+    revision_4_points: int = _Points
+    revision_3_points: int = _Points
+    revision_2_points: int = _Points
+    revision_1_points: int = _Points
     attitude_3_points: int = _Points
     attitude_2_points: int = _Points
     attitude_1_points: int = _Points
+    absent_points: int = _Points
+    excused_points: int = _Points
 
     def to_settings(self) -> ScoringSettings:
         return ScoringSettings(**self.model_dump())

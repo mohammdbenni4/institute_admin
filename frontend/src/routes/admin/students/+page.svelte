@@ -11,15 +11,34 @@
 	import {
 		ApiError,
 		halaqahsApi,
+		halaqahTypesApi,
 		studentsApi,
+		teachersApi,
 		type Halaqah,
 		type OrphanStatus,
 		type Student
 	} from '$lib/api';
 	import { ORPHAN_LABELS, formatDate } from '$lib/labels';
 	import { whatsappLink } from '$lib/utils';
+	import {
+		ignoreUnmatchedHalaqahs,
+		parseStudentsSheet,
+		resolveHalaqahs,
+		toCreatePayload,
+		type ParseResult
+	} from '$lib/import/students';
 	import { goto } from '$app/navigation';
-	import { MessageCircle, Pencil, Plus, Trash2 } from '@lucide/svelte';
+	import {
+		AlertTriangle,
+		CheckCircle2,
+		FileSpreadsheet,
+		Loader2,
+		MessageCircle,
+		Pencil,
+		Plus,
+		Trash2,
+		Upload
+	} from '@lucide/svelte';
 
 	function contactParent(student: Student) {
 		const link = whatsappLink(
@@ -66,6 +85,124 @@
 	let deleteTarget = $state<Student | null>(null);
 	let deleting = $state(false);
 
+	// ─── Excel import ──────────────────────────────────────────────────────────
+	let fileInput = $state<HTMLInputElement | null>(null);
+	let importOpen = $state(false);
+	let importFileName = $state('');
+	let importParsing = $state(false);
+	let importResult = $state<ParseResult | null>(null);
+	let importing = $state(false);
+	let importError = $state('');
+	let importedCount = $state(0);
+	let creatingHalaqahs = $state(false);
+
+	const canImport = $derived(
+		!!importResult &&
+			importResult.rows.length > 0 &&
+			importResult.unmatchedHalaqahs.length === 0 &&
+			!importing &&
+			!creatingHalaqahs
+	);
+
+	function openImport() {
+		fileInput?.click();
+	}
+
+	async function onFileChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = ''; // allow re-selecting the same file
+		if (!file) return;
+
+		importError = '';
+		importedCount = 0;
+		importResult = null;
+		importFileName = file.name;
+		importOpen = true;
+		importParsing = true;
+		try {
+			importResult = await parseStudentsSheet(file, halaqahs);
+		} catch {
+			importError = 'تعذّر قراءة الملف. تأكد أنه ملف Excel صالح يحتوي ورقة الطلاب.';
+		} finally {
+			importParsing = false;
+		}
+	}
+
+	/** Treat unmatched halaqahs as "no halaqah" so the import can proceed. */
+	function ignoreMissingHalaqahs() {
+		if (!importResult) return;
+		importResult = {
+			...importResult,
+			rows: ignoreUnmatchedHalaqahs(importResult.rows),
+			unmatchedHalaqahs: []
+		};
+	}
+
+	/** Create every missing halaqah (placeholder teacher + type), then re-resolve. */
+	async function createMissingHalaqahs() {
+		if (!importResult || importResult.unmatchedHalaqahs.length === 0) return;
+		creatingHalaqahs = true;
+		importError = '';
+		try {
+			const [teacherPage, typePage] = await Promise.all([
+				teachersApi.list({ limit: 1 }),
+				halaqahTypesApi.list({ limit: 1 })
+			]);
+			const teacher = teacherPage.items[0];
+			const type = typePage.items[0];
+			if (!teacher || !type) {
+				importError = 'يجب إنشاء معلم واحد ونوع حلقة واحد على الأقل قبل إنشاء الحلقات.';
+				return;
+			}
+			for (const name of importResult.unmatchedHalaqahs) {
+				await halaqahsApi.create({
+					name,
+					teacher_id: teacher.id,
+					halaqah_type_id: type.id
+				});
+			}
+			// Refresh halaqahs, then re-match the parsed rows against the new list.
+			halaqahs = (await halaqahsApi.list({ limit: 200 })).items;
+			const resolved = resolveHalaqahs(importResult.rows, halaqahs);
+			importResult = {
+				...importResult,
+				rows: resolved.rows,
+				unmatchedHalaqahs: resolved.unmatchedHalaqahs
+			};
+		} catch (err) {
+			importError = err instanceof ApiError ? err.message : 'تعذّر إنشاء الحلقات المفقودة.';
+		} finally {
+			creatingHalaqahs = false;
+		}
+	}
+
+	async function confirmImport() {
+		if (!importResult || !canImport) return;
+		importing = true;
+		importError = '';
+		try {
+			const items = importResult.rows.map(toCreatePayload);
+			const res = await studentsApi.importBulk(items);
+			importedCount = res.created;
+			importResult = null;
+			await load();
+		} catch (err) {
+			importError = err instanceof ApiError ? err.message : 'تعذّر استيراد الطلاب.';
+		} finally {
+			importing = false;
+		}
+	}
+
+	function closeImport() {
+		importOpen = false;
+		importResult = null;
+		importError = '';
+		importedCount = 0;
+		importFileName = '';
+		creatingHalaqahs = false;
+	}
+
 	let halaqahName = $derived((id: string | null) => halaqahs.find((h) => h.id === id)?.name ?? '—');
 	let halaqahOptions = $derived([
 		{ value: '', label: 'بدون حلقة' },
@@ -89,15 +226,29 @@
 		{ key: 'actions', label: 'إجراءات', class: 'w-px' }
 	];
 
+	async function fetchAllStudents(): Promise<Student[]> {
+		const PAGE = 200;
+		const first = await studentsApi.list({ limit: PAGE, offset: 0 });
+		let items = first.items;
+		let offset = PAGE;
+		while (items.length < first.total && offset < 5000) {
+			const next = await studentsApi.list({ limit: PAGE, offset });
+			if (next.items.length === 0) break;
+			items = items.concat(next.items);
+			offset += PAGE;
+		}
+		return items;
+	}
+
 	async function load() {
 		loading = true;
 		listError = '';
 		try {
-			const [studentPage, halaqahPage] = await Promise.all([
-				studentsApi.list({ limit: 200 }),
+			const [studentList, halaqahPage] = await Promise.all([
+				fetchAllStudents(),
 				halaqahsApi.list({ limit: 200 })
 			]);
-			students = studentPage.items;
+			students = studentList;
 			halaqahs = halaqahPage.items;
 		} catch (err) {
 			listError = err instanceof ApiError ? err.message : 'تعذّر تحميل الطلاب.';
@@ -188,9 +339,20 @@
 		breadcrumbs={[{ label: 'لوحة التحكم' }, { label: 'الطلاب' }]}
 	>
 		{#snippet actions()}
+			<Button variant="outline" onclick={openImport}>
+				<FileSpreadsheet class="h-4 w-4" />استيراد من Excel
+			</Button>
 			<Button onclick={openCreate}><Plus class="h-4 w-4" />إضافة طالب</Button>
 		{/snippet}
 	</PageHeader>
+
+	<input
+		bind:this={fileInput}
+		type="file"
+		accept=".xlsx,.xls"
+		class="hidden"
+		onchange={onFileChange}
+	/>
 
 	<FilterBar
 		searchPlaceholder="بحث باسم الطالب أو الأب…"
@@ -335,4 +497,189 @@
 		onConfirm={confirmDelete}
 		onCancel={() => (deleteTarget = null)}
 	/>
+
+	<!-- ═══ Excel import preview ═══ -->
+	<Dialog
+		bind:open={importOpen}
+		title="استيراد الطلاب من Excel"
+		class="max-w-5xl"
+		onOpenChange={(o) => !o && closeImport()}
+	>
+		{#if importParsing}
+			<div class="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+				<Loader2 class="h-5 w-5 animate-spin" />
+				جارٍ قراءة الملف…
+			</div>
+		{:else if importedCount > 0}
+			<!-- success -->
+			<div class="flex flex-col items-center gap-3 py-10 text-center">
+				<CheckCircle2 class="h-12 w-12 text-emerald-500" />
+				<p class="text-lg font-bold text-foreground">تم استيراد {importedCount} طالب بنجاح</p>
+				<Button onclick={closeImport}>تم</Button>
+			</div>
+		{:else if importResult}
+			{@const res = importResult}
+			<div class="space-y-4">
+				<!-- file + summary -->
+				<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+					<span class="flex items-center gap-1.5 font-medium text-foreground">
+						<FileSpreadsheet class="h-4 w-4 text-primary" />{importFileName}
+					</span>
+					<span class="text-muted-foreground">
+						{res.rows.length} صف جاهز للاستيراد
+						{#if res.skippedNoName > 0}· تم تجاهل {res.skippedNoName} صف بلا اسم{/if}
+					</span>
+				</div>
+
+				<!-- placeholder note -->
+				{#if res.placeholderFatherName > 0 || res.placeholderFatherNumber > 0}
+					<div
+						class="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+					>
+						<AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						<span>
+							سيتم استخدام «—» كقيمة مؤقتة لـ
+							{#if res.placeholderFatherName > 0}{res.placeholderFatherName} اسم أب{/if}
+							{#if res.placeholderFatherName > 0 && res.placeholderFatherNumber > 0}
+								و
+							{/if}
+							{#if res.placeholderFatherNumber > 0}{res.placeholderFatherNumber} رقم أب{/if}
+							غير متوفرة في الملف.
+						</span>
+					</div>
+				{/if}
+
+				<!-- unmatched halaqahs (blocks import until resolved) -->
+				{#if res.unmatchedHalaqahs.length > 0}
+					<div
+						class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+					>
+						<div class="flex items-center gap-1.5 font-semibold">
+							<AlertTriangle class="h-4 w-4" />
+							{res.unmatchedHalaqahs.length} حلقة غير موجودة في النظام
+						</div>
+						<div class="mt-2 flex flex-wrap gap-1.5">
+							{#each res.unmatchedHalaqahs as name (name)}
+								<span class="rounded-full bg-destructive/15 px-2 py-0.5 text-xs">{name}</span>
+							{/each}
+						</div>
+						<div class="mt-3 flex flex-wrap gap-2">
+							<Button size="sm" disabled={creatingHalaqahs} onclick={createMissingHalaqahs}>
+								{#if creatingHalaqahs}
+									<Loader2 class="h-3.5 w-3.5 animate-spin" />جارٍ إنشاء الحلقات…
+								{:else}
+									<Plus class="h-3.5 w-3.5" />إنشاء الحلقات المفقودة ({res.unmatchedHalaqahs
+										.length})
+								{/if}
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={creatingHalaqahs}
+								onclick={ignoreMissingHalaqahs}
+							>
+								تجاهل وحفظ الطلاب بدون حلقة
+							</Button>
+						</div>
+						<p class="mt-2 text-xs text-destructive/80">
+							الإنشاء يستخدم أول معلم ونوع حلقة كقيم مؤقتة — يمكنك تعديلها لاحقاً من صفحة الحلقات.
+						</p>
+					</div>
+				{/if}
+
+				<!-- preview table -->
+				<div class="max-h-[45vh] overflow-auto rounded-xl border border-border">
+					<table class="w-full border-collapse text-sm">
+						<thead class="sticky top-0 bg-muted/80 backdrop-blur">
+							<tr class="text-right text-xs text-muted-foreground">
+								<th class="px-3 py-2 font-semibold">الطالب</th>
+								<th class="px-3 py-2 font-semibold">الأب</th>
+								<th class="px-3 py-2 font-semibold">الجوال</th>
+								<th class="px-3 py-2 font-semibold">الحلقة</th>
+								<th class="px-3 py-2 font-semibold">الميلاد</th>
+								<th class="px-3 py-2 font-semibold">المنطقة</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each res.rows as row, i (i)}
+								<tr class="border-t border-border">
+									<td class="px-3 py-1.5 font-medium text-foreground">{row.full_name}</td>
+									<td
+										class={'px-3 py-1.5 ' +
+											(row.fatherNamePlaceholder ? 'text-muted-foreground/50' : 'text-foreground')}
+									>
+										{row.father_name}
+									</td>
+									<td
+										class={'px-3 py-1.5 ' +
+											(row.fatherNumberPlaceholder
+												? 'text-muted-foreground/50'
+												: 'text-foreground')}
+										dir="ltr"
+									>
+										{row.father_number}
+									</td>
+									<td class="px-3 py-1.5">
+										{#if !row.halaqahMatched}
+											<span
+												class="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive"
+											>
+												{row.halaqahName} (غير موجودة)
+											</span>
+										{:else if row.halaqah_id === null}
+											<span class="text-muted-foreground/60">بدون حلقة</span>
+										{:else}
+											<span class="text-foreground">{row.halaqahName}</span>
+										{/if}
+									</td>
+									<td class="px-3 py-1.5 text-muted-foreground" dir="ltr"
+										>{row.date_of_birth ?? '—'}</td
+									>
+									<td
+										class="max-w-[160px] truncate px-3 py-1.5 text-muted-foreground"
+										title={row.residential_area ?? ''}
+									>
+										{row.residential_area ?? '—'}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+
+				{#if importError}
+					<p class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+						{importError}
+					</p>
+				{/if}
+
+				<div class="flex items-center justify-between gap-2 pt-1">
+					<p class="text-xs text-muted-foreground">
+						{#if res.unmatchedHalaqahs.length > 0}
+							لا يمكن الاستيراد حتى تُنشأ الحلقات المفقودة.
+						{:else}
+							سيتم إنشاء {res.rows.length} طالب.
+						{/if}
+					</p>
+					<div class="flex gap-2">
+						<Button variant="outline" onclick={closeImport}>إلغاء</Button>
+						<Button disabled={!canImport} onclick={confirmImport}>
+							{#if importing}
+								<Loader2 class="h-4 w-4 animate-spin" />جارٍ الاستيراد…
+							{:else}
+								<Upload class="h-4 w-4" />استيراد {res.rows.length} طالب
+							{/if}
+						</Button>
+					</div>
+				</div>
+			</div>
+		{:else if importError}
+			<div class="space-y-4">
+				<p class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{importError}</p>
+				<div class="flex justify-start">
+					<Button variant="outline" onclick={closeImport}>إغلاق</Button>
+				</div>
+			</div>
+		{/if}
+	</Dialog>
 </div>

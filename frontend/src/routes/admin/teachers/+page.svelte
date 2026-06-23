@@ -41,6 +41,13 @@
 		teachers.filter((t) => !search || t.full_name.includes(search) || t.email.includes(search))
 	);
 
+	// Mirrors the backend password policy (RawPassword): a typed password must be
+	// at least 6 characters. Empty is allowed while editing (keeps the current one).
+	const PASSWORD_MIN_LENGTH = 6;
+	let passwordTooShort = $derived(
+		form.password.length > 0 && form.password.length < PASSWORD_MIN_LENGTH
+	);
+
 	const columns: Column[] = [
 		{ key: 'full_name', label: 'الاسم' },
 		{ key: 'email', label: 'البريد الإلكتروني' },
@@ -101,6 +108,10 @@
 
 	async function save() {
 		if (saving) return;
+		if (passwordTooShort) {
+			formError = `كلمة المرور قصيرة جدًا؛ يجب أن تتكون من ${PASSWORD_MIN_LENGTH} أحرف على الأقل.`;
+			return;
+		}
 		saving = true;
 		formError = '';
 		try {
@@ -242,7 +253,15 @@
 					bind:value={form.password}
 					required={!editing}
 					placeholder="••••••••"
+					aria-invalid={passwordTooShort}
 				/>
+				{#if passwordTooShort}
+					<p class="text-xs text-destructive">
+						كلمة المرور قصيرة جدًا؛ يجب أن تتكون من {PASSWORD_MIN_LENGTH} أحرف على الأقل.
+					</p>
+				{:else}
+					<p class="text-xs text-muted-foreground">{PASSWORD_MIN_LENGTH} أحرف على الأقل.</p>
+				{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-2">

@@ -79,3 +79,18 @@ class StudentUpdateRequest(BaseModel):
     accepted_at: date | None = None
     notes: str | None = None
     halaqah_id: UUID | None = None
+
+
+class StudentImportRequest(BaseModel):
+    """Bulk student import payload (e.g. parsed from an Excel sheet).
+
+    Rows are created atomically: the whole import succeeds or rolls back.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[StudentCreateRequest] = Field(min_length=1, max_length=2000)
+
+
+class StudentImportResponse(BaseModel):
+    created: int

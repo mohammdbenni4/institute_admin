@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { LogOut, Menu, User } from '@lucide/svelte';
+	import { LogOut, Menu, Moon, Sun, User } from '@lucide/svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Popover from '$lib/components/ui/Popover.svelte';
 	import { logout } from '$lib/api/auth.svelte';
 	import { goto } from '$app/navigation';
+	import { theme } from '$lib/stores/theme.svelte';
 
 	interface Props {
 		userName: string;
@@ -29,6 +30,20 @@
 	</div>
 
 	<div class="flex items-center gap-2">
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={theme.toggle}
+			aria-label={theme.dark ? 'تفعيل الوضع النهاري' : 'تفعيل الوضع الليلي'}
+			title={theme.dark ? 'الوضع النهاري' : 'الوضع الليلي'}
+		>
+			{#if theme.dark}
+				<Sun class="h-4 w-4" />
+			{:else}
+				<Moon class="h-4 w-4" />
+			{/if}
+		</Button>
+
 		<Popover align="end" class="w-48 p-1">
 			{#snippet trigger({ toggle })}
 				<Button variant="ghost" class="gap-2 px-2" onclick={toggle}>

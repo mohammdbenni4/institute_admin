@@ -36,37 +36,58 @@ class ScoringPolicy:
 
     A record's ``card_*`` columns are a snapshot of the policy in force when it
     was written, so changing the policy never silently rewrites history.
+
+    Attendance contributes via three mutually exclusive states:
+      - present → ``present_points``
+      - excused absence (أذن) → ``excused_points``
+      - unexcused absence (غياب) → ``absent_points``
     """
 
     present_points: int
+    absent_points: int  # points for unexcused absence (typically 0)
+    excused_points: int  # points for a legal/excused absence (أذن)
     rating_points: dict[int, int]  # examination rating (1-4) -> card points
+    revision_points: dict[int, int]  # revision/review rating (1-4) -> card points
     attitude_points: dict[int, int]  # behaviour rating (1-3) -> card points
 
-    def card_present(self, present: bool) -> int:
-        return self.present_points if present else 0
+    def card_present(self, present: bool, excused: bool = False) -> int:
+        if present:
+            return self.present_points
+        return self.excused_points if excused else self.absent_points
 
     def card_exam(self, rating: int | None) -> int:
         return self.rating_points.get(rating, 0) if rating is not None else 0
+
+    def card_revision(self, revision_rating: int | None) -> int:
+        return self.revision_points.get(revision_rating, 0) if revision_rating is not None else 0
 
     def card_attitude(self, attitude: int | None) -> int:
         return self.attitude_points.get(attitude, 0) if attitude is not None else 0
 
     def apply(self, record: DailyRecord) -> None:
-        """Recompute and store the four card scores on ``record``."""
-        record.card_present = self.card_present(record.present)
+        """Recompute and store the five card scores on ``record``."""
+        record.card_present = self.card_present(record.present, record.excused)
         record.card_exam = self.card_exam(record.rating)
+        record.card_revision = self.card_revision(record.revision_rating)
         record.card_attitude = self.card_attitude(record.attitude)
         record.total_points = (
-            record.card_present + record.card_exam + record.card_attitude + record.added_points
+            record.card_present
+            + record.card_exam
+            + record.card_revision
+            + record.card_attitude
+            + record.added_points
         )
 
 
 DEFAULT_SCORING = ScoringPolicy(
     present_points=5,
+    absent_points=0,
+    excused_points=0,
     rating_points={4: 7, 3: 5, 2: 3, 1: 0},
+    revision_points={4: 7, 3: 5, 2: 3, 1: 0},
     attitude_points={3: 3, 2: 2, 1: 1},
 )
-"""The built-in weights (present=5; rating 4/3/2→7/5/3; attitude = its value)."""
+"""Built-in weights: present=5; absent/excused=0; rating+revision 4/3/2→7/5/3."""
 
 
 class DailyRecord(AggregateRoot[UUID]):
@@ -81,6 +102,7 @@ class DailyRecord(AggregateRoot[UUID]):
         halaqah_id: UUID,
         record_date: date,
         present: bool,
+        excused: bool = False,
         exam_from: int | None = None,
         exam_to: int | None = None,
         exam_total: int | None = None,
@@ -92,8 +114,10 @@ class DailyRecord(AggregateRoot[UUID]):
         attitude: int | None = None,
         added_points: int = 0,
         notes: str | None = None,
+        problem_ids: list[UUID] | None = None,
         card_present: int | None = None,
         card_exam: int | None = None,
+        card_revision: int | None = None,
         card_attitude: int | None = None,
         total_points: int | None = None,
         created_at: datetime | None = None,
@@ -105,6 +129,7 @@ class DailyRecord(AggregateRoot[UUID]):
         self.halaqah_id = halaqah_id
         self.record_date = record_date
         self.present = present
+        self.excused = excused
         self.exam_from = exam_from
         self.exam_to = exam_to
         self.exam_total = exam_total
@@ -116,6 +141,7 @@ class DailyRecord(AggregateRoot[UUID]):
         self.attitude = attitude
         self.added_points = added_points
         self.notes = notes
+        self.problem_ids: list[UUID] = list(problem_ids) if problem_ids is not None else []
         self.created_at = created_at
         self.updated_at = updated_at
         self._validate()
@@ -124,6 +150,7 @@ class DailyRecord(AggregateRoot[UUID]):
         # (the application layer re-applies the institute's configured policy).
         self.card_present = 0
         self.card_exam = 0
+        self.card_revision = 0
         self.card_attitude = 0
         self.total_points = 0
         if card_present is None:
@@ -131,6 +158,7 @@ class DailyRecord(AggregateRoot[UUID]):
         else:
             self.card_present = card_present
             self.card_exam = card_exam or 0
+            self.card_revision = card_revision or 0
             self.card_attitude = card_attitude or 0
             self.total_points = total_points or 0
 
@@ -143,6 +171,7 @@ class DailyRecord(AggregateRoot[UUID]):
         halaqah_id: UUID,
         record_date: date,
         present: bool,
+        excused: bool = False,
         exam_from: int | None = None,
         exam_to: int | None = None,
         exam_total: int | None = None,
@@ -154,6 +183,7 @@ class DailyRecord(AggregateRoot[UUID]):
         attitude: int | None = None,
         added_points: int = 0,
         notes: str | None = None,
+        problem_ids: list[UUID] | None = None,
     ) -> DailyRecord:
         return cls(
             id=uuid4(),
@@ -162,6 +192,7 @@ class DailyRecord(AggregateRoot[UUID]):
             halaqah_id=halaqah_id,
             record_date=record_date,
             present=present,
+            excused=excused,
             exam_from=exam_from,
             exam_to=exam_to,
             exam_total=exam_total,
@@ -173,6 +204,7 @@ class DailyRecord(AggregateRoot[UUID]):
             attitude=attitude,
             added_points=added_points,
             notes=notes,
+            problem_ids=problem_ids,
         )
 
     # --- Reward-card scores --------------------------------------------------
@@ -188,6 +220,8 @@ class DailyRecord(AggregateRoot[UUID]):
         self._validate()
 
     def _validate(self) -> None:
+        if self.present and self.excused:
+            raise ExcusedWhilePresentError
         if self.rating is not None and not RATING_MIN <= self.rating <= RATING_MAX:
             raise InvalidRatingError
         if (
@@ -293,4 +327,9 @@ class InvalidExamRangeError(BusinessRuleViolationError):
 
 class InvalidAddedPointsError(BusinessRuleViolationError):
     def __init__(self, message: str = "النقاط المضافة يجب ألا تكون سالبة") -> None:
+        super().__init__(message)
+
+
+class ExcusedWhilePresentError(BusinessRuleViolationError):
+    def __init__(self, message: str = "لا يمكن تسجيل العذر لطالب حاضر") -> None:
         super().__init__(message)

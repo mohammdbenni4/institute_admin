@@ -102,13 +102,15 @@
 		return new Date(y, m, 0).getDate();
 	});
 
-	// student_id -> day (1..n) -> present
+	// student_id -> day (1..n) -> attendance state
+	type AttendanceState = 'present' | 'absent' | 'excused';
 	let attendance = $derived.by(() => {
-		const map = new Map<string, Map<number, boolean>>();
+		const map = new Map<string, Map<number, AttendanceState>>();
 		for (const r of records) {
 			const day = Number(r.record_date.slice(8, 10));
 			if (!map.has(r.student_id)) map.set(r.student_id, new Map());
-			map.get(r.student_id)!.set(day, r.present);
+			const state: AttendanceState = r.present ? 'present' : r.excused ? 'excused' : 'absent';
+			map.get(r.student_id)!.set(day, state);
 		}
 		return map;
 	});
@@ -120,9 +122,11 @@
 	];
 
 	function cellClass(studentId: string, day: number): string {
-		const present = attendance.get(studentId)?.get(day);
-		if (present === undefined) return 'bg-muted/40';
-		return present ? 'bg-emerald-400' : 'bg-red-300';
+		const state = attendance.get(studentId)?.get(day);
+		if (state === undefined) return 'bg-muted/40';
+		if (state === 'present') return 'bg-emerald-400';
+		if (state === 'excused') return 'bg-blue-400';
+		return 'bg-red-300';
 	}
 </script>
 
@@ -224,6 +228,9 @@
 			<div class="flex items-center gap-3 text-xs text-muted-foreground">
 				<span class="flex items-center gap-1"
 					><span class="h-3 w-3 rounded-sm bg-emerald-400"></span>حاضر</span
+				>
+				<span class="flex items-center gap-1"
+					><span class="h-3 w-3 rounded-sm bg-blue-400"></span>أذن</span
 				>
 				<span class="flex items-center gap-1"
 					><span class="h-3 w-3 rounded-sm bg-red-300"></span>غائب</span

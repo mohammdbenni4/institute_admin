@@ -41,6 +41,27 @@ export class ApiError extends Error {
 	}
 }
 
+/**
+ * Derive a human-readable message from an error response body. The backend
+ * normally returns a string `detail` (Arabic), but FastAPI's raw validation
+ * format is an array of `{ loc, msg }` entries — handle it so a 422 never
+ * collapses to a bare "حدث خطأ".
+ */
+function extractErrorMessage(data: unknown, status: number): string {
+	if (data && typeof data === 'object') {
+		const body = data as { detail?: unknown; title?: unknown };
+		if (typeof body.detail === 'string' && body.detail) return body.detail;
+		if (Array.isArray(body.detail)) {
+			const parts = body.detail
+				.map((e) => (e && typeof e === 'object' ? (e as { msg?: unknown }).msg : null))
+				.filter((m): m is string => typeof m === 'string' && m.length > 0);
+			if (parts.length) return parts.join('؛ ');
+		}
+		if (typeof body.title === 'string' && body.title) return body.title;
+	}
+	return `فشل الطلب (${status})`;
+}
+
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 const AUTH_PATHS = ['/auth/login', '/auth/refresh'];
@@ -89,8 +110,7 @@ async function request<T>(
 
 	const data = await res.json().catch(() => null);
 	if (!res.ok) {
-		const detail = (data && (data.detail || data.title)) || `فشل الطلب (${res.status})`;
-		throw new ApiError(res.status, typeof detail === 'string' ? detail : 'حدث خطأ', data);
+		throw new ApiError(res.status, extractErrorMessage(data, res.status), data);
 	}
 	return data as T;
 }

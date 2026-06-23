@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +17,14 @@ from institute_administration.modules.daily_records.domain import (
     InvalidStudentError,
     InvalidTeacherError,
 )
-from institute_administration.modules.daily_records.models import DailyRecordModel
+from institute_administration.modules.daily_records.models import (
+    DailyRecordModel,
+    DailyRecordProblemModel,
+)
 from institute_administration.shared.application.pagination import Page
 
 
-def _to_entity(model: DailyRecordModel) -> DailyRecord:
+def _to_entity(model: DailyRecordModel, problem_ids: list[UUID] | None = None) -> DailyRecord:
     return DailyRecord(
         id=model.id,
         student_id=model.student_id,
@@ -29,6 +32,7 @@ def _to_entity(model: DailyRecordModel) -> DailyRecord:
         halaqah_id=model.halaqah_id,
         record_date=model.record_date,
         present=model.present,
+        excused=model.excused,
         exam_from=model.exam_from,
         exam_to=model.exam_to,
         exam_total=model.exam_total,
@@ -40,8 +44,10 @@ def _to_entity(model: DailyRecordModel) -> DailyRecord:
         attitude=model.attitude,
         added_points=model.added_points,
         notes=model.notes,
+        problem_ids=problem_ids or [],
         card_present=model.card_present,
         card_exam=model.card_exam,
+        card_revision=model.card_revision,
         card_attitude=model.card_attitude,
         total_points=model.total_points,
         created_at=model.created_at,
@@ -55,6 +61,7 @@ def _apply(model: DailyRecordModel, record: DailyRecord) -> None:
     model.halaqah_id = record.halaqah_id
     model.record_date = record.record_date
     model.present = record.present
+    model.excused = record.excused
     model.exam_from = record.exam_from
     model.exam_to = record.exam_to
     model.exam_total = record.exam_total
@@ -69,6 +76,7 @@ def _apply(model: DailyRecordModel, record: DailyRecord) -> None:
     # Persist the domain-derived reward-card scores.
     model.card_present = record.card_present
     model.card_exam = record.card_exam
+    model.card_revision = record.card_revision
     model.card_attitude = record.card_attitude
     model.total_points = record.total_points
 
@@ -77,10 +85,42 @@ class SqlAlchemyDailyRecordRepository(DailyRecordRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    # -- junction table helpers -----------------------------------------------
+
+    async def _sync_problems(self, record_id: UUID, problem_ids: list[UUID]) -> None:
+        await self._session.execute(
+            delete(DailyRecordProblemModel).where(
+                DailyRecordProblemModel.daily_record_id == record_id
+            )
+        )
+        for pid in problem_ids:
+            self._session.add(
+                DailyRecordProblemModel(daily_record_id=record_id, problem_id=pid)
+            )
+
+    async def _load_problem_ids_by_records(
+        self, record_ids: list[UUID]
+    ) -> dict[UUID, list[UUID]]:
+        if not record_ids:
+            return {}
+        result = await self._session.execute(
+            select(DailyRecordProblemModel).where(
+                DailyRecordProblemModel.daily_record_id.in_(record_ids)
+            )
+        )
+        by_record: dict[UUID, list[UUID]] = {rid: [] for rid in record_ids}
+        for row in result.scalars().all():
+            by_record[row.daily_record_id].append(row.problem_id)
+        return by_record
+
+    # -- CRUD -----------------------------------------------------------------
+
     async def add(self, record: DailyRecord) -> None:
         model = DailyRecordModel(id=record.id)
         _apply(model, record)
         self._session.add(model)
+        await self._session.flush()
+        await self._sync_problems(record.id, record.problem_ids)
         await self._flush()
 
     async def update(self, record: DailyRecord) -> None:
@@ -88,11 +128,16 @@ class SqlAlchemyDailyRecordRepository(DailyRecordRepository):
         if model is None:  # pragma: no cover - guarded by the service layer
             return
         _apply(model, record)
+        await self._session.flush()
+        await self._sync_problems(record.id, record.problem_ids)
         await self._flush()
 
     async def get_by_id(self, record_id: UUID) -> DailyRecord | None:
         model = await self._session.get(DailyRecordModel, record_id)
-        return _to_entity(model) if model else None
+        if model is None:
+            return None
+        by_record = await self._load_problem_ids_by_records([record_id])
+        return _to_entity(model, by_record.get(record_id, []))
 
     async def list(
         self,
@@ -127,7 +172,12 @@ class SqlAlchemyDailyRecordRepository(DailyRecordRepository):
             .offset(page.offset)
         )
         result = await self._session.execute(stmt)
-        return [_to_entity(m) for m in result.scalars().all()]
+        models = list(result.scalars().all())
+        if not models:
+            return []
+        record_ids = [m.id for m in models]
+        by_record = await self._load_problem_ids_by_records(record_ids)
+        return [_to_entity(m, by_record.get(m.id, [])) for m in models]
 
     async def count(
         self,

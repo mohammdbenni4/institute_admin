@@ -52,7 +52,9 @@ class TeacherCreateRequest(BaseModel):
 
     full_name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(min_length=6, max_length=128)
+    # Length policy is a domain invariant (RawPassword) so the rejection reason
+    # reaches the user in Arabic instead of a generic 422 validation error.
+    password: str
     academic_study: str = Field(min_length=1, max_length=255)
     islamic_study: str = Field(min_length=1, max_length=255)
     is_assistant: bool = False
@@ -64,7 +66,7 @@ class TeacherUpdateRequest(BaseModel):
 
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
-    password: str | None = Field(default=None, min_length=6, max_length=128)
+    password: str | None = None  # length policy enforced by the domain (RawPassword)
     date_of_birth: date | None = None
     is_active: bool | None = None
     academic_study: str | None = Field(default=None, min_length=1, max_length=255)

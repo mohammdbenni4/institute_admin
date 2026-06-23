@@ -12,9 +12,9 @@ export const RATING_OPTIONS: { value: Rating; label: string }[] = [
 ];
 
 export const ATTITUDE_OPTIONS: { value: Attitude; label: string }[] = [
-	{ value: 3, label: 'ممتاز' },
-	{ value: 2, label: 'جيد' },
-	{ value: 1, label: 'مقبول' }
+	{ value: 3, label: 'مؤدب' },
+	{ value: 2, label: 'متوسط' },
+	{ value: 1, label: 'مشاغب' }
 ];
 
 export const ADDED_POINTS_OPTIONS = [0, 5, 10, 15, 20];
@@ -59,30 +59,61 @@ export function previewTotal(input: {
 export interface CardScores {
 	present: number;
 	exam: number;
+	revision: number;
 	attitude: number;
 	total: number;
 }
 
 /** Reward-card scores using the institute's configured weights (or defaults). */
 export function computeScores(
-	input: { present: boolean; rating: number | null; attitude: number | null; added_points: number },
+	input: {
+		present: boolean;
+		excused?: boolean;
+		rating: number | null;
+		revision_rating?: number | null;
+		attitude: number | null;
+		added_points: number;
+	},
 	s: ScoringSettings | null
 ): CardScores {
-	const present = input.present ? (s?.present_points ?? 5) : 0;
+	let present: number;
+	if (input.present) {
+		present = s?.present_points ?? 5;
+	} else if (input.excused) {
+		present = s?.excused_points ?? 0;
+	} else {
+		present = s?.absent_points ?? 0;
+	}
 	const ratingMap: Record<number, number> = s
 		? { 4: s.rating_4_points, 3: s.rating_3_points, 2: s.rating_2_points, 1: s.rating_1_points }
 		: { 4: 7, 3: 5, 2: 3, 1: 0 };
 	const exam = input.present && input.rating != null ? (ratingMap[input.rating] ?? 0) : 0;
+	const revisionMap: Record<number, number> = s
+		? {
+				4: s.revision_4_points,
+				3: s.revision_3_points,
+				2: s.revision_2_points,
+				1: s.revision_1_points
+			}
+		: { 4: 7, 3: 5, 2: 3, 1: 0 };
+	const revision =
+		input.present && input.revision_rating != null ? (revisionMap[input.revision_rating] ?? 0) : 0;
 	const attMap: Record<number, number> = s
 		? { 3: s.attitude_3_points, 2: s.attitude_2_points, 1: s.attitude_1_points }
 		: { 3: 3, 2: 2, 1: 1 };
 	const attitude = input.present && input.attitude != null ? (attMap[input.attitude] ?? 0) : 0;
-	return { present, exam, attitude, total: present + exam + attitude + (input.added_points || 0) };
+	return {
+		present,
+		exam,
+		revision,
+		attitude,
+		total: present + exam + revision + attitude + (input.added_points || 0)
+	};
 }
 
 /** A short Arabic summary of attendance for a student's latest record. */
 export function recordSummary(r: DailyRecord): string {
-	if (!r.present) return 'غائب';
+	if (!r.present) return r.excused ? 'أذن' : 'غائب';
 	const bits: string[] = [];
 	if (r.rating) bits.push(ratingLabel(r.rating));
 	bits.push(`${r.total_points} نقطة`);

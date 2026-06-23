@@ -15,7 +15,10 @@ from fastapi import APIRouter, Depends, Query, status
 
 from institute_administration.api.dependencies import DbSession
 from institute_administration.api.scoping import ScopeDep
-from institute_administration.modules.daily_records.domain import DailyRecordNotFoundError
+from institute_administration.modules.daily_records.domain import (
+    DailyRecord,
+    DailyRecordNotFoundError,
+)
 from institute_administration.modules.daily_records.repository import (
     SqlAlchemyDailyRecordRepository,
 )
@@ -38,6 +41,7 @@ from institute_administration.modules.identity.dependencies import (
     require_roles,
 )
 from institute_administration.modules.identity.domain import User, UserRole
+from institute_administration.modules.problems.repository import SqlAlchemyProblemRepository
 from institute_administration.modules.scoring.repository import SqlAlchemyScoringSettingsRepository
 from institute_administration.shared.application.exceptions import AuthorizationError
 from institute_administration.shared.application.pagination import Page
@@ -49,6 +53,36 @@ async def get_service(session: DbSession) -> DailyRecordService:
 
 
 ServiceDep = Annotated[DailyRecordService, Depends(get_service)]
+
+
+async def _to_response(record: DailyRecord, session: DbSession) -> DailyRecordResponse:
+    problems = await SqlAlchemyProblemRepository(session).get_by_ids(record.problem_ids)
+    return DailyRecordResponse.from_entity(record, problems)
+
+
+async def _to_list_response(
+    records: list[DailyRecord],
+    session: DbSession,
+    total: int,
+    limit: int,
+    offset: int,
+) -> DailyRecordListResponse:
+    all_ids = list({pid for r in records for pid in r.problem_ids})
+    by_id = {}
+    if all_ids:
+        for p in await SqlAlchemyProblemRepository(session).get_by_ids(all_ids):
+            by_id[p.id] = p
+    return DailyRecordListResponse(
+        items=[
+            DailyRecordResponse.from_entity(
+                r, [by_id[pid] for pid in r.problem_ids if pid in by_id]
+            )
+            for r in records
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 # Writes are allowed for teachers and super admins.
 CurrentWriter = Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.TEACHER))]
@@ -69,7 +103,11 @@ _FORBIDDEN = "ليس لديك صلاحية على هذه الحلقة"
     summary="إنشاء سجل يومي",
 )
 async def create(
-    payload: DailyRecordCreateRequest, service: ServiceDep, scope: ScopeDep, _: CurrentWriter
+    payload: DailyRecordCreateRequest,
+    service: ServiceDep,
+    scope: ScopeDep,
+    session: DbSession,
+    _: CurrentWriter,
 ) -> DailyRecordResponse:
     data = payload.model_dump()
     if not scope.is_admin:
@@ -77,7 +115,7 @@ async def create(
             raise AuthorizationError(_FORBIDDEN)
         data["teacher_id"] = scope.teacher_id  # a teacher records only as themselves
     record = await service.create(CreateDailyRecordInput(**data))
-    return DailyRecordResponse.from_entity(record)
+    return await _to_response(record, session)
 
 
 @router.post(
@@ -99,7 +137,7 @@ async def bulk_attendance(
         halaqah_id=payload.halaqah_id,
         teacher_id=teacher_id,
         record_date=record_date,
-        entries=[BulkAttendanceEntry(e.student_id, e.present) for e in payload.entries],
+        entries=[BulkAttendanceEntry(e.student_id, e.present, e.excused) for e in payload.entries],
     )
     return BulkAttendanceResponse(record_date=record_date, created=created, updated=updated)
 
@@ -108,6 +146,7 @@ async def bulk_attendance(
 async def list_(
     service: ServiceDep,
     scope: ScopeDep,
+    session: DbSession,
     student_id: Annotated[UUID | None, Query(description="تصفية حسب الطالب")] = None,
     teacher_id: Annotated[UUID | None, Query(description="تصفية حسب المعلم")] = None,
     halaqah_id: Annotated[UUID | None, Query(description="تصفية حسب الحلقة")] = None,
@@ -135,20 +174,17 @@ async def list_(
         date_from=date_from,
         date_to=date_to,
     )
-    return DailyRecordListResponse(
-        items=[DailyRecordResponse.from_entity(r) for r in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    return await _to_list_response(items, session, total, limit, offset)
 
 
 @router.get("/{record_id}", response_model=DailyRecordResponse, summary="عرض سجل يومي")
-async def get(record_id: UUID, service: ServiceDep, scope: ScopeDep) -> DailyRecordResponse:
+async def get(
+    record_id: UUID, service: ServiceDep, scope: ScopeDep, session: DbSession
+) -> DailyRecordResponse:
     record = await service.get(record_id)
     if not scope.allows_halaqah(record.halaqah_id):
         raise DailyRecordNotFoundError
-    return DailyRecordResponse.from_entity(record)
+    return await _to_response(record, session)
 
 
 @router.patch("/{record_id}", response_model=DailyRecordResponse, summary="تعديل سجل يومي")
@@ -157,6 +193,7 @@ async def update(
     payload: DailyRecordUpdateRequest,
     service: ServiceDep,
     scope: ScopeDep,
+    session: DbSession,
     _: CurrentWriter,
 ) -> DailyRecordResponse:
     existing = await service.get(record_id)
@@ -166,7 +203,7 @@ async def update(
     if not scope.is_admin and "halaqah_id" in data and not scope.allows_halaqah(data["halaqah_id"]):
         raise AuthorizationError(_FORBIDDEN)
     record = await service.update(record_id, UpdateDailyRecordInput(**data))
-    return DailyRecordResponse.from_entity(record)
+    return await _to_response(record, session)
 
 
 @router.delete(

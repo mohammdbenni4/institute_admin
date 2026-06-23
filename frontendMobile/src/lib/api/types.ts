@@ -89,6 +89,23 @@ export interface Student {
 	updated_at: IsoDateTime;
 }
 
+// --- Problems (الصعوبات) ---------------------------------------------------
+export interface ProblemBrief {
+	id: UUID;
+	name: string;
+	level_id: UUID;
+	level_name: string;
+}
+
+export interface Problem {
+	id: UUID;
+	name: string;
+	level_id: UUID;
+	level_name: string;
+	created_at: IsoDateTime;
+	updated_at: IsoDateTime;
+}
+
 // --- Daily records ---------------------------------------------------------
 /** 1..4 examination rating (4 = best). */
 export type Rating = 1 | 2 | 3 | 4;
@@ -102,6 +119,7 @@ export interface DailyRecord {
 	halaqah_id: UUID;
 	record_date: IsoDate;
 	present: boolean;
+	excused: boolean;
 	exam_from: number | null;
 	exam_to: number | null;
 	exam_total: number | null;
@@ -113,9 +131,11 @@ export interface DailyRecord {
 	attitude: Attitude | null;
 	added_points: number;
 	notes: string | null;
+	tagged_problems: ProblemBrief[];
 	// Server-computed reward-card scores (read-only).
 	card_present: number;
 	card_exam: number;
+	card_revision: number;
 	card_attitude: number;
 	total_points: number;
 	created_at: IsoDateTime;
@@ -127,6 +147,7 @@ export interface DailyRecordCreate {
 	teacher_id: UUID;
 	halaqah_id: UUID;
 	present: boolean;
+	excused?: boolean;
 	record_date?: IsoDate | null;
 	exam_from?: number | null;
 	exam_to?: number | null;
@@ -139,6 +160,7 @@ export interface DailyRecordCreate {
 	attitude?: Attitude | null;
 	added_points?: number;
 	notes?: string | null;
+	problem_ids?: UUID[];
 }
 
 /** PATCH body: every field optional; `student_id` is immutable server-side. */
@@ -170,7 +192,13 @@ export interface ScoringSettings {
 	rating_3_points: number;
 	rating_2_points: number;
 	rating_1_points: number;
+	revision_4_points: number;
+	revision_3_points: number;
+	revision_2_points: number;
+	revision_1_points: number;
 	attitude_3_points: number;
 	attitude_2_points: number;
 	attitude_1_points: number;
+	absent_points: number;
+	excused_points: number;
 }

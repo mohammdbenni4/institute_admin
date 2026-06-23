@@ -17,6 +17,8 @@ from institute_administration.modules.students.domain import StudentNotFoundErro
 from institute_administration.modules.students.repository import SqlAlchemyStudentRepository
 from institute_administration.modules.students.schemas import (
     StudentCreateRequest,
+    StudentImportRequest,
+    StudentImportResponse,
     StudentListResponse,
     StudentResponse,
     StudentUpdateRequest,
@@ -59,6 +61,21 @@ async def create(
 ) -> StudentResponse:
     student = await service.create(CreateStudentInput(**payload.model_dump()))
     return StudentResponse.from_entity(student)
+
+
+@router.post(
+    "/import",
+    response_model=StudentImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="استيراد طلاب دفعة واحدة",
+)
+async def import_students(
+    payload: StudentImportRequest, service: ServiceDep, _: CurrentSuperAdmin
+) -> StudentImportResponse:
+    created = await service.create_many(
+        [CreateStudentInput(**item.model_dump()) for item in payload.items]
+    )
+    return StudentImportResponse(created=created)
 
 
 @router.get("", response_model=StudentListResponse, summary="قائمة الطلاب")

@@ -46,7 +46,10 @@ class UserCreateRequest(BaseModel):
 
     full_name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(min_length=6, max_length=128)
+    # Length policy is a domain invariant (RawPassword); validating it here too
+    # would short-circuit the request with a generic 422 before the domain can
+    # explain, in Arabic, *why* the password was rejected.
+    password: str
     role: UserRole
     date_of_birth: date | None = None
     is_active: bool = True
@@ -57,7 +60,7 @@ class UserUpdateRequest(BaseModel):
 
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
-    password: str | None = Field(default=None, min_length=6, max_length=128)
+    password: str | None = None  # length policy enforced by the domain (RawPassword)
     role: UserRole | None = None
     date_of_birth: date | None = None
     is_active: bool | None = None

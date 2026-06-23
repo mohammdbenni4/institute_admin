@@ -12,9 +12,15 @@
 		rating_3_points: 5,
 		rating_2_points: 3,
 		rating_1_points: 0,
+		revision_4_points: 7,
+		revision_3_points: 5,
+		revision_2_points: 3,
+		revision_1_points: 0,
 		attitude_3_points: 3,
 		attitude_2_points: 2,
-		attitude_1_points: 1
+		attitude_1_points: 1,
+		absent_points: 0,
+		excused_points: 0
 	});
 	let loading = $state(true);
 	let saving = $state(false);
@@ -61,10 +67,18 @@
 		{ key: 'rating_2_points', label: 'جيد (2)' },
 		{ key: 'rating_1_points', label: 'ضعيف (1)' }
 	] as const;
+
+	const revisionFields = [
+		{ key: 'revision_4_points', label: 'ممتاز (4)' },
+		{ key: 'revision_3_points', label: 'جيد جداً (3)' },
+		{ key: 'revision_2_points', label: 'جيد (2)' },
+		{ key: 'revision_1_points', label: 'ضعيف (1)' }
+	] as const;
+
 	const attitudeFields = [
-		{ key: 'attitude_3_points', label: 'ممتاز (3)' },
-		{ key: 'attitude_2_points', label: 'جيد (2)' },
-		{ key: 'attitude_1_points', label: 'مقبول (1)' }
+		{ key: 'attitude_3_points', label: 'مؤدب (3)' },
+		{ key: 'attitude_2_points', label: 'متوسط (2)' },
+		{ key: 'attitude_1_points', label: 'مشاغب (1)' }
 	] as const;
 </script>
 
@@ -85,9 +99,7 @@
 		<p class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
 	{/if}
 	{#if saved}
-		<p class="rounded-lg bg-emerald-100 px-3 py-2 text-sm text-emerald-700">
-			تم حفظ الإعدادات بنجاح.
-		</p>
+		<p class="rounded-lg bg-success/10 px-3 py-2 text-sm text-success">تم حفظ الإعدادات بنجاح.</p>
 	{/if}
 
 	<div class="glass-card p-5">
@@ -99,6 +111,7 @@
 		</div>
 
 		<div class="space-y-6">
+			<!-- الحضور: نقاط الحضور + الغياب والعذر في صف واحد -->
 			<div>
 				<h3 class="mb-2 font-bold text-foreground">الحضور</h3>
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -106,11 +119,20 @@
 						<Label for="present">نقاط الحضور</Label>
 						<Input id="present" type="number" min="0" bind:value={form.present_points} />
 					</div>
+					<div class="space-y-2">
+						<Label for="excused_points">أذن (غياب بعذر)</Label>
+						<Input id="excused_points" type="number" min="0" bind:value={form.excused_points} />
+					</div>
+					<div class="space-y-2">
+						<Label for="absent_points">غياب (بلا عذر)</Label>
+						<Input id="absent_points" type="number" min="0" bind:value={form.absent_points} />
+					</div>
 				</div>
 			</div>
 
+			<!-- التقدير: السماع والاختبار -->
 			<div>
-				<h3 class="mb-2 font-bold text-foreground">التقدير (التسميع)</h3>
+				<h3 class="mb-2 font-bold text-foreground">التقدير (التسميع والاختبار)</h3>
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
 					{#each ratingFields as f (f.key)}
 						<div class="space-y-2">
@@ -121,6 +143,20 @@
 				</div>
 			</div>
 
+			<!-- المراجعة -->
+			<div>
+				<h3 class="mb-2 font-bold text-foreground">المراجعة</h3>
+				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+					{#each revisionFields as f (f.key)}
+						<div class="space-y-2">
+							<Label for={f.key}>{f.label}</Label>
+							<Input id={f.key} type="number" min="0" bind:value={form[f.key]} />
+						</div>
+					{/each}
+				</div>
+			</div>
+
+			<!-- الأدب -->
 			<div>
 				<h3 class="mb-2 font-bold text-foreground">الأدب</h3>
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">

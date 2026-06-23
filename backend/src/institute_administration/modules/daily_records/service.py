@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from uuid import UUID
 
@@ -23,6 +23,7 @@ class CreateDailyRecordInput:
     teacher_id: UUID
     halaqah_id: UUID
     present: bool
+    excused: bool = False
     record_date: date | None = None
     exam_from: int | None = None
     exam_to: int | None = None
@@ -35,6 +36,7 @@ class CreateDailyRecordInput:
     attitude: int | None = None
     added_points: int = 0
     notes: str | None = None
+    problem_ids: list[UUID] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class UpdateDailyRecordInput:
     halaqah_id: UUID | Unset = UNSET
     record_date: date | Unset = UNSET
     present: bool | Unset = UNSET
+    excused: bool | Unset = UNSET
     exam_from: int | None | Unset = UNSET
     exam_to: int | None | Unset = UNSET
     exam_total: int | None | Unset = UNSET
@@ -54,12 +57,14 @@ class UpdateDailyRecordInput:
     attitude: int | None | Unset = UNSET
     added_points: int | Unset = UNSET
     notes: str | None | Unset = UNSET
+    problem_ids: list[UUID] | Unset = UNSET
 
 
 @dataclass(frozen=True)
 class BulkAttendanceEntry:
     student_id: UUID
     present: bool
+    excused: bool = False
 
 
 class DailyRecordService:
@@ -76,6 +81,7 @@ class DailyRecordService:
             halaqah_id=data.halaqah_id,
             record_date=data.record_date or datetime.now(UTC).date(),
             present=data.present,
+            excused=data.excused,
             exam_from=data.exam_from,
             exam_to=data.exam_to,
             exam_total=data.exam_total,
@@ -87,6 +93,7 @@ class DailyRecordService:
             attitude=data.attitude,
             added_points=data.added_points,
             notes=data.notes,
+            problem_ids=data.problem_ids,
         )
         record.apply_scoring(self._policy)
         await self._records.add(record)
@@ -114,6 +121,7 @@ class DailyRecordService:
             record = by_student.get(entry.student_id)
             if record is not None:
                 record.present = entry.present
+                record.excused = entry.excused
                 record.apply_scoring(self._policy)
                 await self._records.update(record)
                 updated += 1
@@ -124,6 +132,7 @@ class DailyRecordService:
                     halaqah_id=halaqah_id,
                     record_date=record_date,
                     present=entry.present,
+                    excused=entry.excused,
                 )
                 record.apply_scoring(self._policy)
                 await self._records.add(record)
@@ -179,6 +188,8 @@ class DailyRecordService:
             record.record_date = data.record_date
         if data.present is not UNSET:
             record.present = data.present
+        if data.excused is not UNSET:
+            record.excused = data.excused
         if data.exam_from is not UNSET:
             record.exam_from = data.exam_from
         if data.exam_to is not UNSET:
@@ -201,6 +212,8 @@ class DailyRecordService:
             record.added_points = data.added_points
         if data.notes is not UNSET:
             record.notes = data.notes
+        if data.problem_ids is not UNSET:
+            record.problem_ids = list(data.problem_ids)
         record.revalidate()
         record.apply_scoring(self._policy)
         await self._records.update(record)

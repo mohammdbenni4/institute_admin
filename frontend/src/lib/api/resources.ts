@@ -8,6 +8,12 @@ import type {
 	Halaqah,
 	HalaqahCreate,
 	LeaderboardResponse,
+	Problem,
+	ProblemCreate,
+	ProblemLevel,
+	ProblemLevelCreate,
+	ProblemLevelUpdate,
+	ProblemUpdate,
 	ScoringSettings,
 	HalaqahType,
 	HalaqahTypeCreate,
@@ -17,6 +23,7 @@ import type {
 	PageParams,
 	Student,
 	StudentCreate,
+	StudentImportResponse,
 	StudentUpdate,
 	Teacher,
 	TeacherCreate,
@@ -51,6 +58,8 @@ export const studentsApi = {
 		api.get<Paginated<Student>>(`/students${qs(params)}`),
 	get: (id: UUID) => api.get<Student>(`/students/${id}`),
 	create: (body: StudentCreate) => api.post<Student>('/students', body),
+	importBulk: (items: StudentCreate[]) =>
+		api.post<StudentImportResponse>('/students/import', { items }),
 	update: (id: UUID, body: StudentUpdate) => api.patch<Student>(`/students/${id}`, body),
 	remove: (id: UUID) => api.delete(`/students/${id}`)
 };
@@ -108,4 +117,22 @@ export const analyticsApi = {
 export const scoringApi = {
 	get: () => api.get<ScoringSettings>('/scoring-settings'),
 	update: (body: ScoringSettings) => api.put<ScoringSettings>('/scoring-settings', body)
+};
+
+export const problemLevelsApi = {
+	list: (params?: PageParams) => api.get<Paginated<ProblemLevel>>(`/problem-levels${qs(params)}`),
+	get: (id: UUID) => api.get<ProblemLevel>(`/problem-levels/${id}`),
+	create: (body: ProblemLevelCreate) => api.post<ProblemLevel>('/problem-levels', body),
+	update: (id: UUID, body: ProblemLevelUpdate) =>
+		api.patch<ProblemLevel>(`/problem-levels/${id}`, body),
+	remove: (id: UUID) => api.delete(`/problem-levels/${id}`)
+};
+
+export const problemsApi = {
+	list: (params?: PageParams & { level_id?: UUID }) =>
+		api.get<Paginated<Problem>>(`/problems${qs(params)}`),
+	get: (id: UUID) => api.get<Problem>(`/problems/${id}`),
+	create: (body: ProblemCreate) => api.post<Problem>('/problems', body),
+	update: (id: UUID, body: ProblemUpdate) => api.patch<Problem>(`/problems/${id}`, body),
+	remove: (id: UUID) => api.delete(`/problems/${id}`)
 };

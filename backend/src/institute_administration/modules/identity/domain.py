@@ -23,16 +23,26 @@ from institute_administration.shared.domain import (
 )
 
 __all__ = [
+    "PASSWORD_MAX_LENGTH",
+    "PASSWORD_MIN_LENGTH",
     "Email",
     "EmailAlreadyExistsError",
     "InactiveUserError",
     "InvalidCredentialsError",
     "Page",
+    "RawPassword",
     "User",
     "UserNotFoundError",
     "UserRepository",
     "UserRole",
+    "WeakPasswordError",
 ]
+
+# The institute's password policy. Kept here, in the domain, so it is the single
+# source of truth for "what makes a password acceptable" — the presentation and
+# application layers defer to it rather than re-stating the numbers.
+PASSWORD_MIN_LENGTH = 6
+PASSWORD_MAX_LENGTH = 128
 
 
 class UserRole(StrEnum):
@@ -53,6 +63,29 @@ class Email(ValueObject):
         if "@" not in normalized or "." not in normalized.split("@")[-1]:
             raise BusinessRuleViolationError("البريد الإلكتروني غير صالح")
         object.__setattr__(self, "value", normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class RawPassword(ValueObject):
+    """A plaintext password that satisfies the institute's password policy.
+
+    Constructing it is the only sanctioned way to obtain a password the system
+    will accept; it guards the length invariant so callers can hash ``value``
+    with confidence. A violation surfaces a clear, Arabic, user-facing reason
+    rather than a generic validation error.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if len(self.value) < PASSWORD_MIN_LENGTH:
+            raise WeakPasswordError(
+                f"كلمة المرور قصيرة جدًا؛ يجب أن تتكون من {PASSWORD_MIN_LENGTH} أحرف على الأقل."
+            )
+        if len(self.value) > PASSWORD_MAX_LENGTH:
+            raise WeakPasswordError(
+                f"كلمة المرور طويلة جدًا؛ يجب ألا تتجاوز {PASSWORD_MAX_LENGTH} حرفًا."
+            )
 
 
 class User(AggregateRoot[UUID]):
@@ -169,6 +202,18 @@ class UserNotFoundError(EntityNotFoundError):
 
 class EmailAlreadyExistsError(ConflictError):
     def __init__(self, message: str = "البريد الإلكتروني مستخدم بالفعل") -> None:
+        super().__init__(message)
+
+
+class WeakPasswordError(BusinessRuleViolationError):
+    """Raised when a chosen password does not meet the password policy."""
+
+    def __init__(
+        self,
+        message: str = (
+            f"كلمة المرور قصيرة جدًا؛ يجب أن تتكون من {PASSWORD_MIN_LENGTH} أحرف على الأقل."
+        ),
+    ) -> None:
         super().__init__(message)
 
 
