@@ -58,3 +58,22 @@ export function initials(name: string): string {
 	if (parts.length === 1) return parts[0].slice(0, 2);
 	return parts[0][0] + parts[1][0];
 }
+
+/** First and last ISO dates of the month that `iso` (default today) falls in. */
+export function monthRange(iso: string = todayIso()): { from: string; to: string; days: number } {
+	const [y, m] = iso.split('-').map(Number);
+	const last = new Date(y, m, 0).getDate();
+	const mm = String(m).padStart(2, '0');
+	return { from: `${y}-${mm}-01`, to: `${y}-${mm}-${String(last).padStart(2, '0')}`, days: last };
+}
+
+/** Day-of-month (1..31) of an ISO date. */
+export function dayOfMonth(iso: string): number {
+	return Number(iso.slice(8, 10));
+}
+
+const _arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+/** Render a number with Arabic-Indic digits, e.g. 29 → ٢٩. */
+export function arabicNum(n: number | string): string {
+	return String(n).replace(/[0-9]/g, (d) => _arabicDigits[Number(d)]);
+}

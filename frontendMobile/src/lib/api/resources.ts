@@ -41,6 +41,8 @@ export const dailyRecordsApi = {
 			teacher_id?: UUID;
 			halaqah_id?: UUID;
 			record_date?: string;
+			date_from?: string;
+			date_to?: string;
 		}
 	) => api.get<Paginated<DailyRecord>>(`/daily-records${qs(params)}`),
 	get: (id: UUID) => api.get<DailyRecord>(`/daily-records/${id}`),

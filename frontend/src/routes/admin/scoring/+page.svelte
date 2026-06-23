@@ -117,15 +117,15 @@
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
 					<div class="space-y-2">
 						<Label for="present">نقاط الحضور</Label>
-						<Input id="present" type="number" min="0" bind:value={form.present_points} />
+						<Input id="present" type="number" min="-100" max="100" bind:value={form.present_points} />
 					</div>
 					<div class="space-y-2">
 						<Label for="excused_points">أذن (غياب بعذر)</Label>
-						<Input id="excused_points" type="number" min="0" bind:value={form.excused_points} />
+						<Input id="excused_points" type="number" min="-100" max="100" bind:value={form.excused_points} />
 					</div>
 					<div class="space-y-2">
 						<Label for="absent_points">غياب (بلا عذر)</Label>
-						<Input id="absent_points" type="number" min="0" bind:value={form.absent_points} />
+						<Input id="absent_points" type="number" min="-100" max="100" bind:value={form.absent_points} />
 					</div>
 				</div>
 			</div>
@@ -137,7 +137,7 @@
 					{#each ratingFields as f (f.key)}
 						<div class="space-y-2">
 							<Label for={f.key}>{f.label}</Label>
-							<Input id={f.key} type="number" min="0" bind:value={form[f.key]} />
+							<Input id={f.key} type="number" min="-100" max="100" bind:value={form[f.key]} />
 						</div>
 					{/each}
 				</div>
@@ -150,7 +150,7 @@
 					{#each revisionFields as f (f.key)}
 						<div class="space-y-2">
 							<Label for={f.key}>{f.label}</Label>
-							<Input id={f.key} type="number" min="0" bind:value={form[f.key]} />
+							<Input id={f.key} type="number" min="-100" max="100" bind:value={form[f.key]} />
 						</div>
 					{/each}
 				</div>
@@ -163,7 +163,7 @@
 					{#each attitudeFields as f (f.key)}
 						<div class="space-y-2">
 							<Label for={f.key}>{f.label}</Label>
-							<Input id={f.key} type="number" min="0" bind:value={form[f.key]} />
+							<Input id={f.key} type="number" min="-100" max="100" bind:value={form[f.key]} />
 						</div>
 					{/each}
 				</div>

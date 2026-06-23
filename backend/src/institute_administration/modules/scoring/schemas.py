@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from institute_administration.modules.scoring.repository import ScoringSettings
 
-_Points = Field(ge=0, le=100)
+# Point weights may be negative (e.g. a penalty for absence) up to ±100.
+_Points = Field(ge=-100, le=100)
 
 
 class ScoringSettingsResponse(BaseModel):

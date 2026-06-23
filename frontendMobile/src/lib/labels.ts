@@ -3,6 +3,7 @@
 // The backend remains authoritative; these are for preview only.
 
 import type { Attitude, DailyRecord, Rating, ScoringSettings } from './api/types';
+import { arabicNum } from './utils';
 
 export const RATING_OPTIONS: { value: Rating; label: string }[] = [
 	{ value: 4, label: 'ممتاز' },
@@ -109,6 +110,57 @@ export function computeScores(
 		attitude,
 		total: present + exam + revision + attitude + (input.added_points || 0)
 	};
+}
+
+// --- Structured revision (المراجعة) --------------------------------------
+// The teacher builds a list of revision parts; we serialise them into an Arabic
+// message stored in the record's `revision_lesson`, and derive the points:
+// all parts succeeded → full revision points (rating 4); any failure → 0 (rating 1).
+
+export interface RevisionRow {
+	part: number; // 1..30 (جزء)
+	half: 1 | 2; // 1 = النصف الأول, 2 = النصف الثاني
+	success: boolean;
+}
+
+export const QURAN_PARTS = Array.from({ length: 30 }, (_, i) => i + 1);
+
+export function halfLabel(half: 1 | 2): string {
+	return half === 1 ? 'النصف الأول' : 'النصف الثاني';
+}
+
+/** Serialise revision rows into the Arabic message saved to `revision_lesson`. */
+export function serializeRevisions(rows: RevisionRow[]): string | null {
+	if (rows.length === 0) return null;
+	return rows
+		.map((r) => `الجزء ${arabicNum(r.part)} (${halfLabel(r.half)}): ${r.success ? 'نجح' : 'أخفق'}`)
+		.join('، ');
+}
+
+/** all success → 4 (full points), any fail → 1 (0 points), none → null. */
+export function revisionRatingFromRows(rows: RevisionRow[]): Rating | null {
+	if (rows.length === 0) return null;
+	return rows.every((r) => r.success) ? 4 : 1;
+}
+
+function westernNum(s: string): number {
+	return Number(s.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))));
+}
+
+/** Best-effort parse of a stored revision message back into editable rows. */
+export function parseRevisions(text: string | null | undefined): RevisionRow[] {
+	if (!text) return [];
+	const rows: RevisionRow[] = [];
+	for (const seg of text.split('،')) {
+		const m = seg
+			.trim()
+			.match(/الجزء\s+([٠-٩0-9]+)\s*\((النصف الأول|النصف الثاني)\)\s*:\s*(نجح|أخفق)/);
+		if (!m) continue;
+		const part = westernNum(m[1]);
+		if (part < 1 || part > 30) continue;
+		rows.push({ part, half: m[2] === 'النصف الأول' ? 1 : 2, success: m[3] === 'نجح' });
+	}
+	return rows;
 }
 
 /** A short Arabic summary of attendance for a student's latest record. */
