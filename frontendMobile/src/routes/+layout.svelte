@@ -4,19 +4,23 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { auth, loadCurrentUser } from '$lib/api';
+	import { initOffline } from '$lib/offline';
+	import UnsyncedBanner from '$lib/components/UnsyncedBanner.svelte';
 
 	let { children } = $props();
 	let ready = $state(false);
 
 	onMount(async () => {
 		await loadCurrentUser();
+		await initOffline();
 		ready = true;
 	});
+
+	const onLogin = $derived($page.url.pathname === '/login');
 
 	// Route guard: only authenticated teachers may leave /login.
 	$effect(() => {
 		if (!ready) return;
-		const onLogin = $page.url.pathname === '/login';
 		if (!auth.teacher && !onLogin) goto('/login');
 		else if (auth.teacher && onLogin) goto('/halaqat');
 	});
@@ -32,4 +36,7 @@
 	</div>
 {:else}
 	{@render children()}
+	{#if auth.teacher && !onLogin}
+		<UnsyncedBanner />
+	{/if}
 {/if}

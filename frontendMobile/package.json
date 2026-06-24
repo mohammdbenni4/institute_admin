@@ -6,6 +6,10 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
+		"build:app": "BUILD_TARGET=app vite build --mode app",
+		"cap:sync": "npm run build:app && cap sync",
+		"cap:android": "npm run build:app && cap sync android && cap open android",
+		"apk:debug": "npm run build:app && cap sync android && cd android && ./gradlew assembleDebug",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -13,6 +17,8 @@
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
+		"@capacitor/android": "^7.6.7",
+		"@capacitor/cli": "^7.6.7",
 		"@eslint/js": "^9.15.0",
 		"@sveltejs/adapter-auto": "^3.3.1",
 		"@sveltejs/kit": "^2.8.0",
@@ -36,7 +42,14 @@
 		"vite": "^5.4.11"
 	},
 	"dependencies": {
+		"@capacitor/app": "^7.1.2",
+		"@capacitor/core": "^7.6.7",
+		"@capacitor/local-notifications": "^7.0.6",
+		"@capacitor/network": "^7.0.4",
+		"@capacitor/preferences": "^7.0.4",
+		"@sveltejs/adapter-static": "^3.0.10",
 		"clsx": "^2.1.1",
+		"dexie": "^4.4.4",
 		"tailwind-merge": "^3.6.0"
 	}
 }

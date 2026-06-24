@@ -5,10 +5,6 @@
 	import {
 		ApiError,
 		auth,
-		dailyRecordsApi,
-		problemsApi,
-		scoringApi,
-		studentsApi,
 		type Attitude,
 		type DailyRecord,
 		type Problem,
@@ -16,6 +12,7 @@
 		type ScoringSettings,
 		type Student
 	} from '$lib/api';
+	import { net, repo } from '$lib/offline';
 	import {
 		ADDED_POINTS_OPTIONS,
 		ATTITUDE_OPTIONS,
@@ -95,16 +92,16 @@
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
-			const [s, recs, scoring, probs] = await Promise.all([
-				studentsApi.get(studentId),
-				dailyRecordsApi.list({ student_id: studentId, record_date: date, limit: 1 }),
-				scoringApi.get().catch(() => null),
-				problemsApi.list({ limit: 500 }).catch(() => ({ items: [] as Problem[] }))
+			const [s, rec, scoring, probs] = await Promise.all([
+				repo.getStudent(studentId),
+				repo.getDayRecord(studentId, date),
+				repo.getScoring(),
+				repo.listProblems()
 			]);
 			student = s;
 			settings = scoring;
-			allProblems = probs.items;
-			record = recs.items[0] ?? null;
+			allProblems = probs;
+			record = rec;
 			if (record) {
 				form = {
 					exam_from: record.exam_from?.toString() ?? '',
@@ -178,19 +175,14 @@
 			problem_ids: form.problem_ids
 		};
 		try {
-			if (record) {
-				await dailyRecordsApi.update(record.id, fields);
-			} else {
-				await dailyRecordsApi.create({
-					student_id: studentId,
-					teacher_id: auth.teacher.id,
-					halaqah_id: halaqahId,
-					record_date: date,
-					present: true,
-					...fields
-				});
-			}
-			flash('ok', 'تم حفظ السجل');
+			await repo.upsertDailyRecord({
+				student_id: studentId,
+				teacher_id: auth.teacher.id,
+				halaqah_id: halaqahId,
+				record_date: date,
+				...fields
+			});
+			flash('ok', net.online ? 'تم حفظ السجل' : 'حُفظ محلياً — سيُرفع عند الاتصال');
 			setTimeout(() => goto(`/halaqat/${halaqahId}`), 600);
 		} catch (e) {
 			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ السجل');

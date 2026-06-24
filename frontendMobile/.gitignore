@@ -16,6 +16,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+!.env.app
+
+# Capacitor (native project is generated with `npx cap add android`)
+/android
+/ios
 
 # Vite
 vite.config.js.timestamp-*

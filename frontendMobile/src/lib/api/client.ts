@@ -5,7 +5,13 @@ import { browser } from '$app/environment';
 import { env } from '$env/dynamic/public';
 import type { TokenResponse } from './types';
 
-const BASE_URL = (env.PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1').replace(/\/$/, '');
+// Web (adapter-node) resolves the API at runtime via $env/dynamic/public. The static
+// APK build has no server, so it falls back to the Vite-baked VITE_API_BASE_URL (.env.app).
+const BASE_URL = (
+	env.PUBLIC_API_BASE_URL ||
+	import.meta.env.VITE_API_BASE_URL ||
+	'http://localhost:8000/api/v1'
+).replace(/\/$/, '');
 
 const ACCESS_KEY = 'ia.teacher.access_token';
 const REFRESH_KEY = 'ia.teacher.refresh_token';

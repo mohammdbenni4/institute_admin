@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ApiError, auth, halaqahsApi, type Halaqah } from '$lib/api';
+	import { ApiError, auth, type Halaqah } from '$lib/api';
+	import { repo } from '$lib/offline';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
@@ -18,8 +19,7 @@
 		if (!teacher) return; // guard is redirecting to /login
 		status = 'loading';
 		try {
-			const res = await halaqahsApi.list({ teacher_id: teacher.id, limit: 200 });
-			items = res.items;
+			items = await repo.listHalaqahs(teacher.id);
 			status = 'ready';
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : 'تعذّر تحميل الحلقات';

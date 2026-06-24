@@ -4,14 +4,12 @@
 	import {
 		ApiError,
 		auth,
-		dailyRecordsApi,
-		halaqahsApi,
-		studentsApi,
 		type DailyRecord,
 		type Halaqah,
 		type Rating,
 		type Student
 	} from '$lib/api';
+	import { net, repo } from '$lib/offline';
 	import { ratingLabel } from '$lib/labels';
 	import {
 		addDays,
@@ -205,7 +203,7 @@
 		if (saving || !auth.teacher || students.length === 0) return;
 		saving = true;
 		try {
-			const res = await dailyRecordsApi.bulkAttendance({
+			await repo.setAttendance({
 				halaqah_id: halaqahId,
 				teacher_id: auth.teacher.id,
 				record_date: date,
@@ -214,8 +212,11 @@
 					return { student_id: s.id, present: st === 'present', excused: st === 'excused' };
 				})
 			});
-			monthRecords = await fetchMonthRecords();
-			flash('ok', `تم حفظ الحضور (${res.created + res.updated} طالب)`);
+			monthRecords = await repo.listMonthRecords(halaqahId, month.from, month.to);
+			flash(
+				'ok',
+				net.online ? `تم حفظ الحضور (${students.length} طالب)` : 'حُفظ محلياً — سيُرفع عند الاتصال'
+			);
 		} catch (e) {
 			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ الحضور');
 		} finally {
@@ -225,37 +226,17 @@
 
 	onMount(load);
 
-	// A month of records can exceed the API's 200-row cap, so page through them.
-	async function fetchMonthRecords(): Promise<DailyRecord[]> {
-		const PAGE = 200;
-		let items: DailyRecord[] = [];
-		let offset = 0;
-		for (;;) {
-			const res = await dailyRecordsApi.list({
-				halaqah_id: halaqahId,
-				date_from: month.from,
-				date_to: month.to,
-				limit: PAGE,
-				offset
-			});
-			items = items.concat(res.items);
-			offset += PAGE;
-			if (items.length >= res.total || res.items.length === 0) break;
-		}
-		return items;
-	}
-
 	async function load() {
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
 			const [h, list, recs] = await Promise.all([
-				halaqahsApi.get(halaqahId),
-				studentsApi.list({ halaqah_id: halaqahId, limit: 200 }),
-				fetchMonthRecords()
+				repo.getHalaqah(halaqahId),
+				repo.listStudents(halaqahId),
+				repo.listMonthRecords(halaqahId, month.from, month.to)
 			]);
 			halaqah = h;
-			students = list.items;
+			students = list;
 			monthRecords = recs;
 			status = 'ready';
 		} catch (e) {
