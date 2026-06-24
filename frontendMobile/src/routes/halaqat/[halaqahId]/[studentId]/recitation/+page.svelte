@@ -183,7 +183,7 @@
 				...fields
 			});
 			flash('ok', net.online ? 'تم حفظ السجل' : 'حُفظ محلياً — سيُرفع عند الاتصال');
-			setTimeout(() => goto(`/halaqat/${halaqahId}`), 600);
+			setTimeout(() => goto(`/halaqat/${halaqahId}?tab=recitation&date=${date}`), 600);
 		} catch (e) {
 			console.error('save daily record failed', e);
 			const detail = e instanceof Error ? e.message : 'تعذّر حفظ السجل';

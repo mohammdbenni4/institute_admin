@@ -45,8 +45,12 @@
 	let halaqah = $state<Halaqah | null>(null);
 	let students = $state<Student[]>([]);
 	let monthRecords = $state<DailyRecord[]>([]);
-	let tab = $state<Tab>('overview');
-	let date = $state(today);
+	// Seed the tab/date from the URL so returning from a sub-page lands on the right tab.
+	const initialTab = $page.url.searchParams.get('tab');
+	let tab = $state<Tab>(
+		initialTab === 'attendance' || initialTab === 'recitation' ? initialTab : 'overview'
+	);
+	let date = $state($page.url.searchParams.get('date') || today);
 
 	function attStatus(r: DailyRecord): AttStatus {
 		return r.present ? 'present' : r.excused ? 'excused' : 'absent';
