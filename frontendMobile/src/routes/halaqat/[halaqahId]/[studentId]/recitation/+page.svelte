@@ -9,6 +9,7 @@
 		problemsApi,
 		scoringApi,
 		studentsApi,
+		type Attitude,
 		type DailyRecord,
 		type Problem,
 		type Rating,
@@ -16,11 +17,13 @@
 		type Student
 	} from '$lib/api';
 	import {
+		ADDED_POINTS_OPTIONS,
+		ATTITUDE_OPTIONS,
+		HALF_OPTIONS,
 		QURAN_PARTS,
 		RATING_OPTIONS,
 		computeScores,
 		parseRevisions,
-		revisionRatingFromRows,
 		serializeRevisions,
 		type RevisionRow
 	} from '$lib/labels';
@@ -48,6 +51,11 @@
 		exam_to: '',
 		exam_total: '',
 		rating: null as number | null,
+		revision_rating: null as number | null,
+		homework: '',
+		attitude: null as number | null,
+		added_points: 0 as number | null,
+		notes: '',
 		problems: '',
 		problem_ids: [] as string[]
 	});
@@ -67,16 +75,15 @@
 		return [...map.values()];
 	});
 
-	const revRating = $derived(revisionRatingFromRows(revisions));
 	const scores = $derived(
 		computeScores(
 			{
 				present: record?.present ?? true,
 				excused: record?.excused ?? false,
 				rating: form.rating,
-				revision_rating: revRating,
-				attitude: record?.attitude ?? null,
-				added_points: record?.added_points ?? 0
+				revision_rating: form.revision_rating,
+				attitude: form.attitude,
+				added_points: form.added_points ?? 0
 			},
 			settings
 		)
@@ -104,6 +111,11 @@
 					exam_to: record.exam_to?.toString() ?? '',
 					exam_total: record.exam_total?.toString() ?? '',
 					rating: record.rating,
+					revision_rating: record.revision_rating,
+					homework: record.homework ?? '',
+					attitude: record.attitude,
+					added_points: record.added_points,
+					notes: record.notes ?? '',
 					problems: record.problems ?? '',
 					problem_ids: record.tagged_problems.map((p) => p.id)
 				};
@@ -150,14 +162,18 @@
 		if (saving || !auth.teacher) return;
 		saving = true;
 		feedback = null;
-		// Only the recitation/revision/problems fields; attendance is left untouched.
+		// Everything except attendance (present/excused) — that is set on the الحضور tab.
 		const fields = {
 			exam_from: numOrNull(form.exam_from),
 			exam_to: numOrNull(form.exam_to),
 			exam_total: numOrNull(form.exam_total),
 			rating: (form.rating as Rating | null) ?? null,
 			revision_lesson: serializeRevisions(revisions),
-			revision_rating: revRating,
+			revision_rating: (form.revision_rating as Rating | null) ?? null,
+			homework: orNull(form.homework),
+			attitude: (form.attitude as Attitude | null) ?? null,
+			added_points: form.added_points ?? 0,
+			notes: orNull(form.notes),
 			problems: orNull(form.problems),
 			problem_ids: form.problem_ids
 		};
@@ -174,7 +190,7 @@
 					...fields
 				});
 			}
-			flash('ok', 'تم حفظ التسميع والمراجعة');
+			flash('ok', 'تم حفظ السجل');
 			setTimeout(() => goto(`/halaqat/${halaqahId}`), 600);
 		} catch (e) {
 			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ السجل');
@@ -195,23 +211,22 @@
 	{:else if status === 'error'}
 		<EmptyState icon="error" title="حدث خطأ" hint={error} />
 	{:else}
-		<!-- Points preview -->
+		<!-- Total points -->
 		<section
-			class="flex items-center justify-between rounded-[2rem] border border-outline-variant/15 bg-surface-container-lowest px-5 py-4 shadow-card"
+			class="flex items-center justify-between rounded-[2rem] border border-outline-variant/15 bg-primary/5 px-5 py-4 shadow-card"
 		>
 			<div class="flex flex-col">
-				<span class="text-[11px] font-medium text-on-surface-variant/70"
-					>نقاط التسميع والمراجعة</span
-				>
+				<span class="text-[11px] font-medium text-on-surface-variant/70">مجموع نقاط اليوم</span>
 				<div class="flex flex-wrap gap-2 pt-1 text-[10px] text-on-surface-variant/60">
-					<span>تسميع {scores.exam}</span>
+					<span>حضور {scores.present}</span>
+					<span>· تسميع {scores.exam}</span>
 					<span>· مراجعة {scores.revision}</span>
+					<span>· أدب {scores.attitude}</span>
+					<span>· إضافية {form.added_points ?? 0}</span>
 				</div>
 			</div>
 			<div class="flex items-baseline gap-1 text-primary">
-				<span class="font-jakarta text-3xl font-bold leading-none"
-					>{scores.exam + scores.revision}</span
-				>
+				<span class="font-jakarta text-3xl font-bold leading-none">{scores.total}</span>
 				<span class="text-xs font-medium">نقطة</span>
 			</div>
 		</section>
@@ -307,27 +322,16 @@
 								</select>
 							</div>
 							<!-- half -->
-							<div class="grid grid-cols-2 gap-2">
-								<button
-									type="button"
-									onclick={() => (rev.half = 1)}
-									class={'rounded-full border py-2 text-xs font-bold transition active:scale-95 ' +
-										(rev.half === 1
-											? 'border-primary bg-primary text-on-primary'
-											: 'border-outline-variant/30 bg-surface-container-lowest text-on-surface-variant')}
+							<div class="flex items-center gap-2">
+								<span class="w-12 text-[12px] font-medium text-on-surface-variant">النصف</span>
+								<select
+									bind:value={rev.half}
+									class="flex-1 rounded-xl border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
 								>
-									النصف الأول (١/٢)
-								</button>
-								<button
-									type="button"
-									onclick={() => (rev.half = 2)}
-									class={'rounded-full border py-2 text-xs font-bold transition active:scale-95 ' +
-										(rev.half === 2
-											? 'border-primary bg-primary text-on-primary'
-											: 'border-outline-variant/30 bg-surface-container-lowest text-on-surface-variant')}
-								>
-									النصف الثاني (٢/٢)
-								</button>
+									{#each HALF_OPTIONS as h (h.value)}
+										<option value={h.value}>{h.label}</option>
+									{/each}
+								</select>
 							</div>
 							<!-- status -->
 							<div class="grid grid-cols-2 gap-2">
@@ -355,14 +359,55 @@
 						</div>
 					{/each}
 				</div>
-				<p class="text-[10px] text-on-surface-variant/50">
-					{#if revRating === 4}
-						كل المراجعات ناجحة — نقاط المراجعة كاملة.
-					{:else}
-						يوجد إخفاق — نقاط المراجعة صفر.
-					{/if}
-				</p>
 			{/if}
+
+			<div class="border-t border-outline-variant/15 pt-4">
+				<Field label="تقييم المراجعة" icon="grade">
+					<PillGroup bind:value={form.revision_rating} options={RATING_OPTIONS} />
+				</Field>
+			</div>
+		</section>
+
+		<!-- الواجب والأدب -->
+		<section
+			class="space-y-5 rounded-[2rem] border border-outline-variant/15 bg-surface-container-lowest p-5 shadow-card"
+		>
+			<Field label="الواجب القادم" icon="assignment">
+				<input
+					bind:value={form.homework}
+					placeholder="مثال: حفظ نصف صفحة"
+					class="w-full rounded-2xl bg-surface-container-low px-4 py-3 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+				/>
+			</Field>
+
+			<Field label="الأدب" icon="volunteer_activism">
+				<PillGroup bind:value={form.attitude} options={ATTITUDE_OPTIONS} />
+			</Field>
+		</section>
+
+		<!-- نقاط إضافية وملاحظات -->
+		<section
+			class="space-y-5 rounded-[2rem] border border-outline-variant/15 bg-surface-container-lowest p-5 shadow-card"
+		>
+			<Field label="نقاط إضافية" icon="star">
+				<PillGroup
+					bind:value={form.added_points}
+					allowNull={false}
+					options={ADDED_POINTS_OPTIONS.map((v) => ({
+						value: v,
+						label: v === 0 ? 'لا شيء' : `+${v}`
+					}))}
+				/>
+			</Field>
+
+			<Field label="ملاحظات" icon="edit_note">
+				<textarea
+					bind:value={form.notes}
+					rows="3"
+					placeholder="اكتب ملاحظاتك هنا…"
+					class="w-full resize-none rounded-2xl bg-surface-container-low p-4 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+				></textarea>
+			</Field>
 		</section>
 
 		<!-- الصعوبات -->

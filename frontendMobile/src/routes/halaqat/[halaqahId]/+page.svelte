@@ -9,9 +9,26 @@
 		studentsApi,
 		type DailyRecord,
 		type Halaqah,
+		type Rating,
 		type Student
 	} from '$lib/api';
-	import { addDays, cn, dayOfMonth, formatDateArabic, monthRange, todayIso } from '$lib/utils';
+	import { ratingLabel } from '$lib/labels';
+	import {
+		addDays,
+		arabicNum,
+		cn,
+		dayOfMonth,
+		formatDateArabic,
+		initials,
+		monthRange,
+		todayIso
+	} from '$lib/utils';
+
+	/** "١٥ نقطة" / "١٠ نقاط" — rough Arabic pluralisation for the points pill. */
+	function pointsLabel(n: number): string {
+		const unit = n >= 3 && n <= 10 ? 'نقاط' : 'نقطة';
+		return `${arabicNum(n)} ${unit}`;
+	}
 	import TopBar from '$lib/components/TopBar.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
@@ -65,6 +82,146 @@
 		).size;
 		return { rate: total ? Math.round((present / total) * 100) : 0, points, todayCount, total };
 	});
+
+	// ===== التسميع والمراجعة tab: split students into waiting / done / absent =====
+	type RecKind = 'waiting' | 'done' | 'absent';
+	type Recitation = {
+		student: Student;
+		kind: RecKind;
+		status: AttStatus | null; // attendance for the selected date
+		points: number; // points earned on the selected date (0 if no record)
+		rating: Rating | null; // today's (done) or latest exam rating (waiting)
+		examText: string; // today's (done) or latest recitation summary
+		homework: string | null; // most recent assigned homework
+	};
+
+	/** A record counts as a recitation once it carries an exam, rating, or revision. */
+	function hasRecitation(r: DailyRecord): boolean {
+		return r.rating != null || !!r.revision_lesson || r.exam_total != null || r.exam_to != null;
+	}
+
+	/** A short Arabic summary of what was recited (exam range and/or revision). */
+	function recitationText(r: DailyRecord): string {
+		const bits: string[] = [];
+		if (r.exam_from != null && r.exam_to != null) {
+			bits.push(`من ${arabicNum(r.exam_from)} إلى ${arabicNum(r.exam_to)}`);
+		} else if (r.exam_to != null) {
+			bits.push(`إلى ${arabicNum(r.exam_to)}`);
+		} else if (r.exam_from != null) {
+			bits.push(`من ${arabicNum(r.exam_from)}`);
+		} else if (r.exam_total != null) {
+			bits.push(`${arabicNum(r.exam_total)} صفحة`);
+		}
+		if (r.revision_lesson) bits.push('مراجعة');
+		return bits.join(' · ') || '—';
+	}
+
+	const recitation = $derived.by(() => {
+		// Records per student, newest first, so "latest" lookups are just `.find`.
+		const byStudent = new Map<string, DailyRecord[]>();
+		for (const r of monthRecords) {
+			const arr = byStudent.get(r.student_id);
+			if (arr) arr.push(r);
+			else byStudent.set(r.student_id, [r]);
+		}
+		for (const arr of byStudent.values())
+			arr.sort((a, b) => b.record_date.localeCompare(a.record_date));
+
+		const waiting: Recitation[] = [];
+		const done: Recitation[] = [];
+		const absent: Recitation[] = [];
+		for (const s of students) {
+			const recs = byStudent.get(s.id) ?? [];
+			const todayRec = recs.find((r) => r.record_date === date) ?? null;
+			const dayPoints = todayRec?.total_points ?? 0;
+			const lastRecit = recs.find(hasRecitation) ?? null;
+			const lastHw = recs.find((r) => r.homework && r.homework.trim() !== '')?.homework ?? null;
+			const st = todayRec ? attStatus(todayRec) : null;
+
+			if (todayRec && (st === 'absent' || st === 'excused')) {
+				absent.push({
+					student: s,
+					kind: 'absent',
+					status: st,
+					points: dayPoints,
+					rating: lastRecit?.rating ?? null,
+					examText: lastRecit ? recitationText(lastRecit) : 'لم يُسجّل تسميع بعد',
+					homework: lastHw
+				});
+			} else if (todayRec && hasRecitation(todayRec)) {
+				done.push({
+					student: s,
+					kind: 'done',
+					status: st,
+					points: dayPoints,
+					rating: todayRec.rating,
+					examText: recitationText(todayRec),
+					homework: todayRec.homework
+				});
+			} else {
+				waiting.push({
+					student: s,
+					kind: 'waiting',
+					status: st,
+					points: dayPoints,
+					rating: lastRecit?.rating ?? null,
+					examText: lastRecit ? recitationText(lastRecit) : 'لم يُسجّل تسميع بعد',
+					homework: lastHw
+				});
+			}
+		}
+		return { waiting, done, absent };
+	});
+
+	// ===== Fast attendance (الحضور tab) =====
+	let attendance = $state<Record<string, AttStatus>>({});
+	let saving = $state(false);
+	let feedback = $state<{ type: 'ok' | 'err'; text: string } | null>(null);
+	let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+	// Seed/refresh the selections from the saved records for the chosen date.
+	$effect(() => {
+		const map: Record<string, AttStatus> = {};
+		for (const s of students) {
+			const r = dateRecords.get(s.id);
+			map[s.id] = r ? attStatus(r) : 'present';
+		}
+		attendance = map;
+	});
+
+	function setAllAttendance(value: AttStatus) {
+		const map: Record<string, AttStatus> = {};
+		for (const s of students) map[s.id] = value;
+		attendance = map;
+	}
+
+	function flash(type: 'ok' | 'err', text: string) {
+		feedback = { type, text };
+		clearTimeout(feedbackTimer);
+		feedbackTimer = setTimeout(() => (feedback = null), 2600);
+	}
+
+	async function saveAttendance() {
+		if (saving || !auth.teacher || students.length === 0) return;
+		saving = true;
+		try {
+			const res = await dailyRecordsApi.bulkAttendance({
+				halaqah_id: halaqahId,
+				teacher_id: auth.teacher.id,
+				record_date: date,
+				entries: students.map((s) => {
+					const st = attendance[s.id] ?? 'present';
+					return { student_id: s.id, present: st === 'present', excused: st === 'excused' };
+				})
+			});
+			monthRecords = await fetchMonthRecords();
+			flash('ok', `تم حفظ الحضور (${res.created + res.updated} طالب)`);
+		} catch (e) {
+			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ الحضور');
+		} finally {
+			saving = false;
+		}
+	}
 
 	onMount(load);
 
@@ -163,6 +320,21 @@
 	</section>
 {/snippet}
 
+{#snippet attBtn(sid: string, value: AttStatus, label: string, activeClass: string)}
+	<button
+		type="button"
+		onclick={() => (attendance[sid] = value)}
+		class={cn(
+			'rounded-full border py-2 text-[11px] font-bold transition active:scale-95',
+			(attendance[sid] ?? 'present') === value
+				? activeClass
+				: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant'
+		)}
+	>
+		{label}
+	</button>
+{/snippet}
+
 {#snippet statusChip(s: AttStatus | undefined)}
 	{#if s === 'present'}
 		<span class="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold text-emerald-700"
@@ -182,6 +354,94 @@
 			>لم يُسجّل</span
 		>
 	{/if}
+{/snippet}
+
+{#snippet infoCol(label: string, value: string)}
+	<div class="min-w-0 flex-1">
+		<p class="text-[11px] font-medium text-on-surface-variant/45">{label}</p>
+		<p class="truncate text-[13px] font-bold text-primary">{value}</p>
+	</div>
+{/snippet}
+
+{#snippet recitationCard(item: Recitation)}
+	<a
+		href={`/halaqat/${halaqahId}/${item.student.id}/recitation?date=${date}`}
+		class="flex items-center gap-3 px-4 py-3.5 transition active:bg-surface-container-low"
+	>
+		<!-- avatar -->
+		<div
+			class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-deep text-sm font-bold text-white shadow-sm"
+		>
+			{initials(item.student.full_name)}
+		</div>
+
+		<div class="min-w-0 flex-1">
+			<!-- line 1: name + points (+ rating) -->
+			<div class="flex items-center gap-2">
+				<h3 class="min-w-0 flex-1 truncate text-[16px] font-bold text-on-surface">
+					{item.student.full_name}
+				</h3>
+				<span
+					class="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-tint px-2.5 py-1 text-[11px] font-bold text-brand-deep"
+				>
+					<Icon name="star" filled class="text-[12px]" />
+					{pointsLabel(item.points)}
+				</span>
+				{#if item.kind !== 'absent' && item.rating != null}
+					<span
+						class="shrink-0 rounded-full bg-brand-tint px-2.5 py-1 text-[11px] font-bold text-brand-deep"
+						>{ratingLabel(item.rating)}</span
+					>
+				{/if}
+			</div>
+
+			<!-- line 2: two columns split by a vertical line -->
+			<div class="mt-2 flex items-stretch gap-3">
+				{#if item.kind === 'done'}
+					<div class="min-w-0 flex-1">
+						<p class="text-[11px] font-medium text-on-surface-variant/45">الحالة</p>
+						<p class="flex items-center gap-1 truncate text-[13px] font-bold text-primary">
+							<Icon name="check_circle" filled class="text-[14px]" /> تم الرصد بنجاح
+						</p>
+					</div>
+					<div class="w-px self-stretch bg-outline-variant/30"></div>
+					{@render infoCol('أتمّ التسميع', item.examText)}
+				{:else if item.kind === 'absent'}
+					<div class="min-w-0 flex-1">
+						<p class="text-[11px] font-medium text-on-surface-variant/45">الحالة</p>
+						<div class="pt-0.5">{@render statusChip(item.status ?? undefined)}</div>
+					</div>
+					<div class="w-px self-stretch bg-outline-variant/30"></div>
+					{@render infoCol('آخر تسميع', item.examText)}
+				{:else}
+					{@render infoCol('الوظيفة الحالية', item.homework ?? 'لا يوجد واجب')}
+					<div class="w-px self-stretch bg-outline-variant/30"></div>
+					{@render infoCol('آخر تسميع', item.examText)}
+				{/if}
+			</div>
+		</div>
+	</a>
+{/snippet}
+
+{#snippet sectionHeader(icon: string, label: string, n: number, tone: string)}
+	<div class={cn('flex items-center gap-2 rounded-full px-4 py-2 text-[14px] font-bold', tone)}>
+		<Icon name={icon} filled class="text-lg" />
+		<span>{label}</span>
+		<span class="ms-auto rounded-full bg-white/70 px-2 py-0.5 text-[11px]">{arabicNum(n)}</span>
+	</div>
+{/snippet}
+
+{#snippet recitationSection(icon: string, label: string, items: Recitation[], tone: string)}
+	<div class="space-y-2.5">
+		{@render sectionHeader(icon, label, items.length, tone)}
+		<div
+			class="divide-y divide-outline-variant/10 overflow-hidden rounded-[1.75rem] border border-outline-variant/10 bg-surface-container-lowest shadow-card"
+		>
+			{#each items as item (item.student.id)}
+				{@render recitationCard(item)}
+			{/each}
+		</div>
+	</div>
 {/snippet}
 
 <TopBar title={halaqah?.name ?? 'الحلقة'} subtitle="إدارة الحلقة" backHref="/halaqat" />
@@ -278,7 +538,7 @@
 						<div class="min-w-max space-y-1">
 							<!-- day numbers -->
 							<div class="flex items-center gap-0.5">
-								<span class="w-20 shrink-0"></span>
+								<span class="sticky left-0 z-10 w-20 shrink-0 bg-surface-container-lowest"></span>
 								{#each days as d (d)}
 									<span class="w-4 text-center text-[7px] text-on-surface-variant/50">{d}</span>
 								{/each}
@@ -286,7 +546,7 @@
 							{#each students as s (s.id)}
 								<div class="flex items-center gap-0.5">
 									<span
-										class="w-20 shrink-0 truncate text-[10px] font-medium text-on-surface"
+										class="sticky left-0 z-10 w-20 shrink-0 truncate bg-surface-container-lowest pl-1 text-[10px] font-medium text-on-surface"
 										dir="rtl">{s.full_name}</span
 									>
 									{#each days as d (d)}
@@ -300,74 +560,116 @@
 				</section>
 			</div>
 		{:else if tab === 'attendance'}
-			<!-- ===== Attendance: pick a student ===== -->
+			<!-- ===== Fast attendance: 3-state per student ===== -->
 			<div class="space-y-3">
 				{@render dateBar()}
-				<a
-					href={`/halaqat/${halaqahId}/attendance`}
-					class="flex items-center justify-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 py-2 text-xs font-bold text-primary active:scale-95"
-				>
-					<Icon name="checklist" class="text-base" /> تحضير سريع لكامل الحلقة
-				</a>
+				<div class="flex gap-2">
+					<button
+						onclick={() => setAllAttendance('present')}
+						class="flex-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 py-2 text-xs font-bold text-emerald-700 active:scale-95"
+					>
+						تحديد الكل حاضر
+					</button>
+					<button
+						onclick={() => setAllAttendance('absent')}
+						class="flex-1 rounded-full border border-error/20 bg-error/5 py-2 text-xs font-bold text-error active:scale-95"
+					>
+						تحديد الكل غائب
+					</button>
+				</div>
 				<ul class="space-y-2.5">
 					{#each students as s (s.id)}
-						{@const rec = dateRecords.get(s.id)}
-						<li>
-							<a
-								href={`/halaqat/${halaqahId}/${s.id}/present?date=${date}`}
-								class="flex items-center gap-3 rounded-[1.75rem] border border-outline-variant/12 bg-surface-container-lowest p-3.5 shadow-sm transition active:scale-[0.99]"
+						<li
+							class="flex items-center gap-3 rounded-[1.75rem] border border-outline-variant/12 bg-surface-container-lowest p-3.5 shadow-sm"
+						>
+							<span class="min-w-0 flex-1 truncate text-[15px] font-bold text-on-surface"
+								>{s.full_name}</span
 							>
-								<span class="min-w-0 flex-1 truncate text-[15px] font-bold text-on-surface"
-									>{s.full_name}</span
-								>
-								{@render statusChip(rec ? attStatus(rec) : undefined)}
-								<Icon name="chevron_left" class="text-on-surface-variant/30" />
-							</a>
+							<div class="grid w-44 shrink-0 grid-cols-3 gap-1.5">
+								{@render attBtn(
+									s.id,
+									'present',
+									'حاضر',
+									'border-emerald-500 bg-emerald-500 text-white shadow-sm'
+								)}
+								{@render attBtn(
+									s.id,
+									'excused',
+									'أذن',
+									'border-blue-500 bg-blue-500 text-white shadow-sm'
+								)}
+								{@render attBtn(
+									s.id,
+									'absent',
+									'غائب',
+									'border-error bg-error text-on-error shadow-sm'
+								)}
+							</div>
 						</li>
 					{/each}
 				</ul>
 			</div>
 		{:else}
-			<!-- ===== Recitation & revision: pick a student ===== -->
-			<div class="space-y-3">
+			<!-- ===== Recitation & revision: waiting / done / absent ===== -->
+			<div class="space-y-6">
 				{@render dateBar()}
-				<ul class="space-y-2.5">
-					{#each students as s (s.id)}
-						{@const rec = dateRecords.get(s.id)}
-						{@const done =
-							!!rec && (rec.rating != null || !!rec.revision_lesson || rec.exam_total != null)}
-						<li>
-							<a
-								href={`/halaqat/${halaqahId}/${s.id}/recitation?date=${date}`}
-								class="flex items-center gap-3 rounded-[1.75rem] border border-outline-variant/12 bg-surface-container-lowest p-3.5 shadow-sm transition active:scale-[0.99]"
-							>
-								<span class="min-w-0 flex-1 truncate text-[15px] font-bold text-on-surface"
-									>{s.full_name}</span
-								>
-								{#if !rec}
-									{@render statusChip(undefined)}
-								{:else if !rec.present}
-									{@render statusChip(attStatus(rec))}
-								{:else if done}
-									<span
-										class="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary"
-									>
-										<Icon name="check_circle" filled class="text-sm" /> تم
-									</span>
-								{:else}
-									<span
-										class="rounded-full bg-surface-container-high px-2.5 py-1 text-[10px] font-medium text-on-surface-variant/60"
-										>بانتظار</span
-									>
-								{/if}
-								<Icon name="chevron_left" class="text-on-surface-variant/30" />
-							</a>
-						</li>
-					{/each}
-				</ul>
+
+				{#if recitation.waiting.length > 0}
+					{@render recitationSection(
+						'pending_actions',
+						'طلاب بانتظار التسميع',
+						recitation.waiting,
+						'bg-brand-tint text-brand-deep'
+					)}
+				{/if}
+
+				{#if recitation.done.length > 0}
+					{@render recitationSection(
+						'task_alt',
+						'طلاب أتمّوا التسميع',
+						recitation.done,
+						'bg-emerald-500/15 text-emerald-700'
+					)}
+				{/if}
+
+				{#if recitation.absent.length > 0}
+					{@render recitationSection(
+						'event_busy',
+						'الطلاب الغائبون',
+						recitation.absent,
+						'bg-error/10 text-error'
+					)}
+				{/if}
 			</div>
 		{/if}
 	{/if}
 </main>
+
+{#if feedback}
+	<div
+		class={cn(
+			'fixed inset-x-0 bottom-28 z-50 mx-auto flex w-fit items-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold text-white shadow-lg',
+			feedback.type === 'ok' ? 'bg-primary' : 'bg-error'
+		)}
+	>
+		<Icon name={feedback.type === 'ok' ? 'check_circle' : 'error'} class="text-lg" />
+		{feedback.text}
+	</div>
+{/if}
+
+{#if status === 'ready' && tab === 'attendance' && students.length > 0}
+	<button
+		onclick={saveAttendance}
+		disabled={saving}
+		class="fixed bottom-24 left-6 z-50 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-white shadow-fab transition active:scale-95 disabled:opacity-70"
+		aria-label="حفظ الحضور"
+	>
+		{#if saving}
+			<Icon name="progress_activity" class="animate-spin text-3xl" />
+		{:else}
+			<Icon name="save" class="text-3xl" />
+		{/if}
+	</button>
+{/if}
 
 <BottomNav />

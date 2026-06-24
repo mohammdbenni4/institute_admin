@@ -170,6 +170,7 @@ export type DailyRecordUpdate = Partial<Omit<DailyRecordCreate, 'student_id'>>;
 export interface BulkAttendanceEntry {
 	student_id: UUID;
 	present: boolean;
+	excused?: boolean;
 }
 
 export interface BulkAttendanceRequest {
