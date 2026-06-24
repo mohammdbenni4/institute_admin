@@ -241,9 +241,23 @@ function applyOptimisticScores(rec: CachedRecord, scoring: ScoringSettings | nul
 	rec.total_points = s.total;
 }
 
+/** UUID with a fallback (crypto.randomUUID needs a secure context, which a WebView may lack). */
+function uid(): string {
+	const c = globalThis.crypto;
+	if (c?.randomUUID) return c.randomUUID();
+	if (c?.getRandomValues) {
+		const b = c.getRandomValues(new Uint8Array(16));
+		b[6] = (b[6] & 0x0f) | 0x40;
+		b[8] = (b[8] & 0x3f) | 0x80;
+		const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+		return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+	}
+	return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function blankRecord(input: UpsertInput, now: string): CachedRecord {
 	return {
-		id: `local:${crypto.randomUUID()}`,
+		id: `local:${uid()}`,
 		student_id: input.student_id,
 		teacher_id: input.teacher_id,
 		halaqah_id: input.halaqah_id,
@@ -313,6 +327,21 @@ async function buildCachedRecord(
 	return rec;
 }
 
+/** Write a record, guaranteeing the unique [student_id+record_date] key isn't doubly
+ * occupied (reuse the existing row's id so `put` updates instead of colliding). */
+async function commitRecord(rec: CachedRecord): Promise<void> {
+	const dup = await db.records
+		.where('[student_id+record_date]')
+		.equals([rec.student_id, rec.record_date])
+		.first();
+	if (dup && dup.id !== rec.id) {
+		rec.id = dup.id;
+		rec.localOnly = dup.localOnly;
+		rec.created_at = dup.created_at;
+	}
+	await db.records.put(rec);
+}
+
 /** Create-or-update a daily record by its natural key (student, date). */
 export async function upsertDailyRecord(input: UpsertInput): Promise<CachedRecord> {
 	const existing = await db.records
@@ -320,7 +349,7 @@ export async function upsertDailyRecord(input: UpsertInput): Promise<CachedRecor
 		.equals([input.student_id, input.record_date])
 		.first();
 	const rec = await buildCachedRecord(existing, input);
-	await db.records.put(rec);
+	await commitRecord(rec);
 	await refreshPending();
 	void syncNow();
 	return rec;
@@ -348,7 +377,7 @@ export async function setAttendance(input: AttendanceInput): Promise<void> {
 			present: e.present,
 			excused: e.excused
 		});
-		await db.records.put(rec);
+		await commitRecord(rec);
 	}
 	await refreshPending();
 	void syncNow();

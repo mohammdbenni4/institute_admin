@@ -185,7 +185,9 @@
 			flash('ok', net.online ? 'تم حفظ السجل' : 'حُفظ محلياً — سيُرفع عند الاتصال');
 			setTimeout(() => goto(`/halaqat/${halaqahId}`), 600);
 		} catch (e) {
-			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ السجل');
+			console.error('save daily record failed', e);
+			const detail = e instanceof Error ? e.message : 'تعذّر حفظ السجل';
+			flash('err', detail || 'تعذّر حفظ السجل');
 			saving = false;
 		}
 	}
