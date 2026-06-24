@@ -51,11 +51,26 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 const AUTH_PATHS = ['/auth/login', '/auth/refresh'];
 
+/** Network request timeout (ms). Without this a stalled request hangs the page on a
+ * perpetual spinner; on timeout the fetch aborts and the offline cache takes over. */
+const TIMEOUT_MS = 12000;
+
+/** `fetch` with an abort-based timeout. AbortError is treated as a network error upstream. */
+async function fetchWithTimeout(url: string, init: Parameters<typeof fetch>[1]): Promise<Response> {
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+	try {
+		return await fetch(url, { ...init, signal: ctrl.signal });
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /** Exchange the stored refresh token for a fresh token pair. Returns success. */
 async function tryRefresh(): Promise<boolean> {
 	const refresh = tokens.refresh;
 	if (!refresh) return false;
-	const res = await fetch(`${BASE_URL}/auth/refresh`, {
+	const res = await fetchWithTimeout(`${BASE_URL}/auth/refresh`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ refresh_token: refresh })
@@ -80,7 +95,7 @@ async function request<T>(
 	const access = tokens.access;
 	if (access) headers['Authorization'] = `Bearer ${access}`;
 
-	const res = await fetch(`${BASE_URL}${path}`, {
+	const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
 		method,
 		headers,
 		body: body !== undefined ? JSON.stringify(body) : undefined

@@ -589,6 +589,19 @@
 						</li>
 					{/each}
 				</ul>
+
+				<!-- Inline save — sits under the last student, never covers a row -->
+				<button
+					onclick={saveAttendance}
+					disabled={saving}
+					class="flex w-full items-center justify-center gap-2 rounded-full bg-brand py-3.5 text-sm font-bold text-white shadow-fab transition active:scale-[0.98] disabled:opacity-70"
+				>
+					{#if saving}
+						<Icon name="progress_activity" class="animate-spin text-xl" /> جارٍ الحفظ…
+					{:else}
+						<Icon name="save" class="text-xl" /> حفظ الحضور
+					{/if}
+				</button>
 			</div>
 		{:else}
 			<!-- ===== Recitation & revision: waiting / done / absent ===== -->
@@ -636,21 +649,6 @@
 		<Icon name={feedback.type === 'ok' ? 'check_circle' : 'error'} class="text-lg" />
 		{feedback.text}
 	</div>
-{/if}
-
-{#if status === 'ready' && tab === 'attendance' && students.length > 0}
-	<button
-		onclick={saveAttendance}
-		disabled={saving}
-		class="fixed bottom-24 left-6 z-50 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-white shadow-fab transition active:scale-95 disabled:opacity-70"
-		aria-label="حفظ الحضور"
-	>
-		{#if saving}
-			<Icon name="progress_activity" class="animate-spin text-3xl" />
-		{:else}
-			<Icon name="save" class="text-3xl" />
-		{/if}
-	</button>
 {/if}
 
 <BottomNav />
