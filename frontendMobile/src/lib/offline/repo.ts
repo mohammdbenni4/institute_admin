@@ -327,6 +327,12 @@ async function buildCachedRecord(
 	return rec;
 }
 
+/** Deep plain copy — strips Svelte `$state` proxies (e.g. `form.problem_ids`), which
+ * IndexedDB's structured-clone can't serialise (DataCloneError otherwise). */
+function toPlain<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
 /** Write a record, guaranteeing the unique [student_id+record_date] key isn't doubly
  * occupied (reuse the existing row's id so `put` updates instead of colliding). */
 async function commitRecord(rec: CachedRecord): Promise<void> {
@@ -339,7 +345,7 @@ async function commitRecord(rec: CachedRecord): Promise<void> {
 		rec.localOnly = dup.localOnly;
 		rec.created_at = dup.created_at;
 	}
-	await db.records.put(rec);
+	await db.records.put(toPlain(rec));
 }
 
 /** Create-or-update a daily record by its natural key (student, date). */
