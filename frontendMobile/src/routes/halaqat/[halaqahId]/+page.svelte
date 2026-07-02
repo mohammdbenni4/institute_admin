@@ -207,17 +207,19 @@
 	});
 
 	// ===== Fast attendance (الحضور tab) =====
-	let attendance = $state<Record<string, AttStatus>>({});
+	// No default choice: a student is only saved once the teacher picks a status.
+	let attendance = $state<Record<string, AttStatus | undefined>>({});
 	let saving = $state(false);
 	let feedback = $state<{ type: 'ok' | 'err'; text: string } | null>(null);
 	let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// Seed/refresh the selections from the saved records for the chosen date.
+	// Seed the selections from saved records for the chosen date; leave students with
+	// no record unset (no default) so the teacher chooses explicitly.
 	$effect(() => {
-		const map: Record<string, AttStatus> = {};
+		const map: Record<string, AttStatus | undefined> = {};
 		for (const s of students) {
 			const r = dateRecords.get(s.id);
-			map[s.id] = r ? attStatus(r) : 'present';
+			if (r) map[s.id] = attStatus(r);
 		}
 		attendance = map;
 	});
@@ -236,21 +238,29 @@
 
 	async function saveAttendance() {
 		if (saving || !auth.teacher || students.length === 0) return;
+		// Only save students the teacher actually marked (no forced default).
+		const entries = students
+			.filter((s) => attendance[s.id] != null)
+			.map((s) => {
+				const st = attendance[s.id]!;
+				return { student_id: s.id, present: st === 'present', excused: st === 'excused' };
+			});
+		if (entries.length === 0) {
+			flash('err', 'لم تحدّد حضور أي طالب');
+			return;
+		}
 		saving = true;
 		try {
 			await repo.setAttendance({
 				halaqah_id: halaqahId,
 				teacher_id: auth.teacher.id,
 				record_date: date,
-				entries: students.map((s) => {
-					const st = attendance[s.id] ?? 'present';
-					return { student_id: s.id, present: st === 'present', excused: st === 'excused' };
-				})
+				entries
 			});
 			await reloadRecords();
 			flash(
 				'ok',
-				net.online ? `تم حفظ الحضور (${students.length} طالب)` : 'حُفظ محلياً — سيُرفع عند الاتصال'
+				net.online ? `تم حفظ الحضور (${entries.length} طالب)` : 'حُفظ محلياً — سيُرفع عند الاتصال'
 			);
 		} catch (e) {
 			flash('err', e instanceof ApiError ? e.message : 'تعذّر حفظ الحضور');
@@ -431,7 +441,7 @@
 		onclick={() => (attendance[sid] = value)}
 		class={cn(
 			'rounded-full border py-2 text-[11px] font-bold transition active:scale-95',
-			(attendance[sid] ?? 'present') === value
+			attendance[sid] === value
 				? activeClass
 				: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant'
 		)}

@@ -19,7 +19,7 @@ import {
 	type Student
 } from '$lib/api';
 import { computeScores } from '$lib/labels';
-import { db, metaGet, metaSet, type CachedRecord } from './db';
+import { db, metaGet, metaSet, type CachedRecord, type RecordBaseline } from './db';
 import { net } from './net.svelte';
 import { refreshPending } from './state.svelte';
 import { isNetworkError, syncNow } from './sync';
@@ -325,6 +325,25 @@ function blankRecord(input: UpsertInput, now: string): CachedRecord {
 	};
 }
 
+/** Snapshot the editable fields as the "before" baseline for a change diff. */
+function snapshotBaseline(r: DailyRecord): RecordBaseline {
+	return {
+		present: r.present,
+		excused: r.excused,
+		exam_from: r.exam_from,
+		exam_to: r.exam_to,
+		exam_total: r.exam_total,
+		homework: r.homework,
+		problems: r.problems,
+		rating: r.rating,
+		revision_lesson: r.revision_lesson,
+		revision_rating: r.revision_rating,
+		attitude: r.attitude,
+		added_points: r.added_points,
+		notes: r.notes
+	};
+}
+
 async function buildCachedRecord(
 	existing: CachedRecord | undefined,
 	input: UpsertInput
@@ -332,6 +351,13 @@ async function buildCachedRecord(
 	const now = new Date().toISOString();
 	const base = existing ?? blankRecord(input, now);
 	const pick = <T>(v: T | undefined, fallback: T): T => (v !== undefined ? v : fallback);
+
+	// Capture the server "before" state the first time a clean record is edited;
+	// keep the original snapshot across further edits; null for locally-created rows.
+	let baseline: RecordBaseline | null;
+	if (!existing) baseline = null;
+	else if (existing.dirty === 0) baseline = snapshotBaseline(existing);
+	else baseline = existing.baseline ?? null;
 
 	const rec: CachedRecord = {
 		...base,
@@ -350,7 +376,8 @@ async function buildCachedRecord(
 		notes: pick(input.notes, base.notes),
 		updated_at: now,
 		dirty: 1,
-		localOnly: existing ? existing.localOnly : 1
+		localOnly: existing ? existing.localOnly : 1,
+		baseline
 	};
 
 	if (input.problem_ids !== undefined) {
@@ -424,4 +451,44 @@ export async function setAttendance(input: AttendanceInput): Promise<void> {
 	}
 	await refreshPending();
 	void syncNow();
+}
+
+/** Discard a single un-uploaded change: delete locally-created rows, or revert an
+ * edited row to the server's version (online) / its captured baseline (offline).
+ * Only this record is affected; other pending changes are left untouched. */
+export async function discardChange(id: string): Promise<void> {
+	const rec = await db.records.get(id);
+	if (!rec) return;
+
+	if (rec.localOnly) {
+		await db.records.delete(id);
+	} else if (net.online) {
+		try {
+			const res = await dailyRecordsApi.list({
+				student_id: rec.student_id,
+				record_date: rec.record_date,
+				limit: 1
+			});
+			const srv = res.items[0];
+			await db.records.delete(id);
+			if (srv) await db.records.put({ ...srv, dirty: 0, localOnly: 0 });
+		} catch (e) {
+			if (!isNetworkError(e)) throw e;
+			await restoreFromBaseline(rec); // lost connection mid-way — fall back to the snapshot
+		}
+	} else {
+		await restoreFromBaseline(rec);
+	}
+	await refreshPending();
+}
+
+/** Roll a dirty record back to its captured baseline (server values) and mark it clean. */
+async function restoreFromBaseline(rec: CachedRecord): Promise<void> {
+	if (rec.baseline) {
+		Object.assign(rec, rec.baseline);
+		applyOptimisticScores(rec, await cachedScoring());
+	}
+	rec.dirty = 0;
+	rec.baseline = null;
+	await db.records.put(toPlain(rec));
 }

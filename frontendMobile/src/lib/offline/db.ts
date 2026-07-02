@@ -5,6 +5,26 @@
 import Dexie, { type Table } from 'dexie';
 import type { DailyRecord, Halaqah, Problem, Student } from '$lib/api';
 
+/** The editable fields captured before local edits began (server truth), used to
+ * show an old→new diff and to revert a single un-uploaded change. `null` = the
+ * record was created locally and has no server-side "before" state. */
+export type RecordBaseline = Pick<
+	DailyRecord,
+	| 'present'
+	| 'excused'
+	| 'exam_from'
+	| 'exam_to'
+	| 'exam_total'
+	| 'homework'
+	| 'problems'
+	| 'rating'
+	| 'revision_lesson'
+	| 'revision_rating'
+	| 'attitude'
+	| 'added_points'
+	| 'notes'
+>;
+
 /** A daily record in the cache, with sync bookkeeping. */
 export interface CachedRecord extends DailyRecord {
 	/** 1 = has local changes not yet pushed to the server. */
@@ -13,6 +33,8 @@ export interface CachedRecord extends DailyRecord {
 	localOnly: 0 | 1;
 	/** Selected difficulty ids for the next push (server returns `tagged_problems`). */
 	problem_ids?: string[];
+	/** Server values before the current un-pushed edits (null for locally-created records). */
+	baseline?: RecordBaseline | null;
 }
 
 export interface MetaRow {

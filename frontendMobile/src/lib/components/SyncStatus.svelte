@@ -1,10 +1,20 @@
 <script lang="ts">
-	import { net, syncNow, syncState, listPendingChanges, type PendingChange } from '$lib/offline';
+	import {
+		net,
+		syncNow,
+		syncState,
+		listPendingChanges,
+		discardChange,
+		type PendingChange
+	} from '$lib/offline';
 	import { arabicNum, formatDateShort } from '$lib/utils';
 	import Icon from './Icon.svelte';
 
 	let showing = $state(false);
 	let items = $state<PendingChange[]>([]);
+	let expandedId = $state<string | null>(null); // row whose old→new diff is open
+	let confirmingId = $state<string | null>(null); // row awaiting delete confirmation
+	let discarding = $state(false);
 
 	async function reload() {
 		items = await listPendingChanges();
@@ -17,6 +27,25 @@
 
 	function close() {
 		showing = false;
+		expandedId = null;
+		confirmingId = null;
+	}
+
+	function toggle(id: string) {
+		expandedId = expandedId === id ? null : id;
+	}
+
+	async function doDiscard(id: string) {
+		if (discarding) return;
+		discarding = true;
+		try {
+			await discardChange(id);
+			confirmingId = null;
+			if (expandedId === id) expandedId = null;
+			await reload();
+		} finally {
+			discarding = false;
+		}
 	}
 
 	async function upload() {
@@ -98,17 +127,84 @@
 				<p class="text-[11px] text-on-surface-variant/60">لا توجد تغييرات محلية بانتظار الرفع.</p>
 			</div>
 		{:else}
-			<ul class="max-h-[45vh] divide-y divide-outline-variant/10 overflow-y-auto">
+			<ul class="max-h-[50vh] divide-y divide-outline-variant/10 overflow-y-auto">
 				{#each items as it (it.id)}
-					<li class="flex items-center gap-3 px-5 py-3">
-						<Icon name="edit_note" class="shrink-0 text-lg text-amber-500" />
-						<div class="min-w-0 flex-1">
-							<p class="truncate text-[14px] font-bold text-on-surface">{it.studentName}</p>
-							<p class="truncate text-[11px] text-on-surface-variant/60">{it.detail}</p>
+					<li class="px-3 py-1.5">
+						<div class="flex items-center gap-1">
+							<!-- tap the row to reveal what changed -->
+							<button
+								type="button"
+								onclick={() => toggle(it.id)}
+								class="flex min-w-0 flex-1 items-center gap-2.5 rounded-2xl px-2 py-2 text-right transition active:bg-surface-container-low"
+							>
+								<Icon
+									name={expandedId === it.id ? 'expand_less' : 'expand_more'}
+									class="shrink-0 text-lg text-on-surface-variant/50"
+								/>
+								<div class="min-w-0 flex-1">
+									<p class="truncate text-[14px] font-bold text-on-surface">{it.studentName}</p>
+									<p class="truncate text-[11px] text-on-surface-variant/60">
+										{it.localOnly ? 'سجل جديد' : 'تعديل'} · {it.detail}
+									</p>
+								</div>
+								<span class="shrink-0 text-[11px] text-on-surface-variant/50">
+									{formatDateShort(it.dateIso)}
+								</span>
+							</button>
+							<button
+								type="button"
+								onclick={() => (confirmingId = confirmingId === it.id ? null : it.id)}
+								class="shrink-0 rounded-full p-2 text-error transition active:scale-90"
+								aria-label="حذف التغيير"
+							>
+								<Icon name="delete" class="text-lg" />
+							</button>
 						</div>
-						<span class="shrink-0 text-[11px] text-on-surface-variant/50">
-							{formatDateShort(it.dateIso)}
-						</span>
+
+						{#if expandedId === it.id}
+							<div class="mx-2 mb-1 mt-0.5 space-y-1.5 rounded-2xl bg-surface-container-low p-3">
+								{#if it.changes.length === 0}
+									<p class="text-[11px] text-on-surface-variant/60">لا تفاصيل إضافية.</p>
+								{:else}
+									{#each it.changes as c (c.label)}
+										<div class="flex items-center gap-2 text-[11px]">
+											<span class="w-24 shrink-0 font-bold text-on-surface-variant/70"
+												>{c.label}</span
+											>
+											<span class="min-w-0 flex-1 truncate text-on-surface-variant/50 line-through">
+												{c.old}
+											</span>
+											<Icon name="arrow_back" class="shrink-0 text-[13px] text-primary" />
+											<span class="min-w-0 flex-1 truncate font-bold text-emerald-700">{c.new}</span
+											>
+										</div>
+									{/each}
+								{/if}
+							</div>
+						{/if}
+
+						{#if confirmingId === it.id}
+							<div
+								class="mx-2 mb-1.5 mt-0.5 flex items-center gap-2 rounded-2xl border border-error/20 bg-error/5 p-2.5"
+							>
+								<span class="flex-1 text-[11px] font-bold text-error">حذف هذا التغيير؟</span>
+								<button
+									type="button"
+									onclick={() => doDiscard(it.id)}
+									disabled={discarding}
+									class="rounded-full bg-error px-3 py-1.5 text-[11px] font-bold text-on-error active:scale-95 disabled:opacity-60"
+								>
+									حذف
+								</button>
+								<button
+									type="button"
+									onclick={() => (confirmingId = null)}
+									class="rounded-full bg-surface-container-high px-3 py-1.5 text-[11px] font-bold text-on-surface-variant active:scale-95"
+								>
+									إلغاء
+								</button>
+							</div>
+						{/if}
 					</li>
 				{/each}
 			</ul>
