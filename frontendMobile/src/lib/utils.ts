@@ -41,6 +41,27 @@ export function formatDateShort(iso: string): string {
 	return _shortFmt.format(new Date(iso + 'T00:00:00'));
 }
 
+const _monthFmt = new Intl.DateTimeFormat('ar', { month: 'long', year: 'numeric' });
+
+/** A human Arabic month + year, e.g. "يونيو ٢٠٢٦". */
+export function formatMonthArabic(iso: string): string {
+	return _monthFmt.format(new Date(iso + 'T00:00:00'));
+}
+
+/** Add `delta` months to an ISO date, returning a new `YYYY-MM-DD`. */
+export function addMonths(iso: string, delta: number): string {
+	const [y, m, d] = iso.split('-').map(Number);
+	const dt = new Date(y, m - 1 + delta, d);
+	const mm = String(dt.getMonth() + 1).padStart(2, '0');
+	const day = String(dt.getDate()).padStart(2, '0');
+	return `${dt.getFullYear()}-${mm}-${day}`;
+}
+
+/** The `YYYY-MM` value for an `<input type="month">`. */
+export function monthInputValue(iso: string): string {
+	return iso.slice(0, 7);
+}
+
 /** Build a WhatsApp deep link from a phone (+ optional message); null if empty. */
 export function whatsappLink(phone: string | null | undefined, message = ''): string | null {
 	if (!phone) return null;

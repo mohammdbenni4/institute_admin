@@ -5,7 +5,7 @@
 	import { page } from '$app/stores';
 	import { auth, loadCurrentUser } from '$lib/api';
 	import { initOffline } from '$lib/offline';
-	import UnsyncedBanner from '$lib/components/UnsyncedBanner.svelte';
+	import SyncStatus from '$lib/components/SyncStatus.svelte';
 
 	let { children } = $props();
 	let ready = $state(false);
@@ -37,6 +37,6 @@
 {:else}
 	{@render children()}
 	{#if auth.teacher && !onLogin}
-		<UnsyncedBanner />
+		<SyncStatus />
 	{/if}
 {/if}

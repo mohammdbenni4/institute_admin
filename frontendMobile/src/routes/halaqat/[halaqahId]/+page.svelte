@@ -13,11 +13,14 @@
 	import { ratingLabel } from '$lib/labels';
 	import {
 		addDays,
+		addMonths,
 		arabicNum,
 		cn,
 		dayOfMonth,
 		formatDateArabic,
+		formatMonthArabic,
 		initials,
+		monthInputValue,
 		monthRange,
 		todayIso
 	} from '$lib/utils';
@@ -35,7 +38,9 @@
 
 	const halaqahId = $derived($page.params.halaqahId ?? '');
 	const today = todayIso();
-	const month = monthRange(today);
+	// Teachers may browse well into the past; cap the calendar at today (no future records).
+	const historyMin = addMonths(today, -36);
+	const currentMonthKey = today.slice(0, 7);
 
 	type AttStatus = 'present' | 'excused' | 'absent';
 	type Tab = 'overview' | 'attendance' | 'recitation';
@@ -44,19 +49,36 @@
 	let error = $state('');
 	let halaqah = $state<Halaqah | null>(null);
 	let students = $state<Student[]>([]);
-	let monthRecords = $state<DailyRecord[]>([]);
+	// Records fetched for a wider window (selected month + a lookback) so the recitation
+	// list can surface a student's last exam even when it lands in an earlier month.
+	let windowRecords = $state<DailyRecord[]>([]);
+	let recordsLoading = $state(false);
+	let refreshing = $state(false);
+	let loadedRange = $state('');
 	// Seed the tab/date from the URL so returning from a sub-page lands on the right tab.
 	const initialTab = $page.url.searchParams.get('tab');
 	let tab = $state<Tab>(
 		initialTab === 'attendance' || initialTab === 'recitation' ? initialTab : 'overview'
 	);
+	// `date` is the single source of truth; the viewed month is derived from it.
 	let date = $state($page.url.searchParams.get('date') || today);
+
+	const month = $derived(monthRange(date));
+	const isCurrentMonth = $derived(monthInputValue(date) === currentMonthKey);
+	// Fetch window: three months of lookback for "last recitation", capped at the month end.
+	const windowFrom = $derived(addMonths(month.from, -3));
+	const windowTo = $derived(month.to);
 
 	function attStatus(r: DailyRecord): AttStatus {
 		return r.present ? 'present' : r.excused ? 'excused' : 'absent';
 	}
 
 	const days = $derived(Array.from({ length: month.days }, (_, i) => i + 1));
+
+	// Records that fall inside the selected month (heatmap / stats / attendance).
+	const monthRecords = $derived(
+		windowRecords.filter((r) => r.record_date >= month.from && r.record_date <= month.to)
+	);
 
 	// studentId → day(1..n) → status, for the heatmap.
 	const heat = $derived.by(() => {
@@ -82,7 +104,14 @@
 		const todayCount = new Set(
 			monthRecords.filter((r) => r.record_date === today).map((r) => r.student_id)
 		).size;
-		return { rate: total ? Math.round((present / total) * 100) : 0, points, todayCount, total };
+		const recordedDays = new Set(monthRecords.map((r) => r.record_date)).size;
+		return {
+			rate: total ? Math.round((present / total) * 100) : 0,
+			points,
+			todayCount,
+			recordedDays,
+			total
+		};
 	});
 
 	// ===== التسميع والمراجعة tab: split students into waiting / done / absent =====
@@ -120,8 +149,10 @@
 
 	const recitation = $derived.by(() => {
 		// Records per student, newest first, so "latest" lookups are just `.find`.
+		// Uses the wider window so a student's last exam/homework still shows after
+		// the month rolls over (fixes: previous تسميع vanishing in the new month).
 		const byStudent = new Map<string, DailyRecord[]>();
-		for (const r of monthRecords) {
+		for (const r of windowRecords) {
 			const arr = byStudent.get(r.student_id);
 			if (arr) arr.push(r);
 			else byStudent.set(r.student_id, [r]);
@@ -216,7 +247,7 @@
 					return { student_id: s.id, present: st === 'present', excused: st === 'excused' };
 				})
 			});
-			monthRecords = await repo.listMonthRecords(halaqahId, month.from, month.to);
+			await reloadRecords();
 			flash(
 				'ok',
 				net.online ? `تم حفظ الحضور (${students.length} طالب)` : 'حُفظ محلياً — سيُرفع عند الاتصال'
@@ -234,14 +265,13 @@
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
-			const [h, list, recs] = await Promise.all([
+			const [h, list] = await Promise.all([
 				repo.getHalaqah(halaqahId),
-				repo.listStudents(halaqahId),
-				repo.listMonthRecords(halaqahId, month.from, month.to)
+				repo.listStudents(halaqahId)
 			]);
 			halaqah = h;
 			students = list;
-			monthRecords = recs;
+			await reloadRecords();
 			status = 'ready';
 		} catch (e) {
 			error = e instanceof ApiError ? e.message : 'تعذّر تحميل بيانات الحلقة';
@@ -249,9 +279,57 @@
 		}
 	}
 
+	/** (Re)fetch the record window for the currently-selected month. */
+	async function reloadRecords() {
+		const from = windowFrom;
+		const to = windowTo;
+		recordsLoading = true;
+		try {
+			windowRecords = await repo.listMonthRecords(halaqahId, from, to);
+			loadedRange = `${from}..${to}`;
+		} finally {
+			recordsLoading = false;
+		}
+	}
+
+	// Pull fresh records whenever the viewed month changes (month bar, calendar jump,
+	// or day chevrons crossing a month boundary).
+	$effect(() => {
+		const key = `${windowFrom}..${windowTo}`;
+		if (status !== 'ready' || loadedRange === key) return;
+		void reloadRecords();
+	});
+
+	/** Manual "تحديث" — re-pull halaqah, students, and records from the server so
+	 * newly-added students (with no local edits) show up without a re-login. */
+	async function refresh() {
+		if (refreshing || !auth.teacher) return;
+		refreshing = true;
+		try {
+			const [h, list] = await Promise.all([
+				repo.getHalaqah(halaqahId),
+				repo.listStudents(halaqahId)
+			]);
+			halaqah = h;
+			students = list;
+			await reloadRecords();
+			flash('ok', net.online ? 'تم التحديث' : 'لا يوجد اتصال — تعذّر التحديث');
+		} catch (e) {
+			flash('err', e instanceof ApiError ? e.message : 'تعذّر التحديث');
+		} finally {
+			refreshing = false;
+		}
+	}
+
+	function goToMonth(anchorIso: string) {
+		const r = monthRange(anchorIso);
+		if (r.from > today) return; // no future months
+		date = r.to < today ? r.to : today; // land on the month's last day (or today)
+	}
+
 	function shiftDay(delta: number) {
 		const next = addDays(date, delta);
-		if (next > today || next < month.from) return;
+		if (next > today || next < historyMin) return;
 		date = next;
 	}
 
@@ -288,7 +366,7 @@
 			<input
 				type="date"
 				bind:value={date}
-				min={month.from}
+				min={historyMin}
 				max={today}
 				class="sr-only"
 				aria-label="اختيار التاريخ"
@@ -299,6 +377,48 @@
 			disabled={date >= today}
 			class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-container-low text-primary active:scale-95 disabled:opacity-30"
 			aria-label="اليوم التالي"
+		>
+			<Icon name="chevron_left" />
+		</button>
+	</section>
+{/snippet}
+
+{#snippet monthBar()}
+	<section
+		class="flex items-center justify-between rounded-[2rem] border border-outline-variant/15 bg-surface-container-lowest p-2.5 shadow-sm"
+	>
+		<button
+			onclick={() => goToMonth(addMonths(month.from, -1))}
+			class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-container-low text-primary active:scale-95"
+			aria-label="الشهر السابق"
+		>
+			<Icon name="chevron_right" />
+		</button>
+		<label class="flex cursor-pointer flex-col items-center">
+			<span class="flex items-center gap-1.5 text-[14px] font-bold text-on-surface">
+				{formatMonthArabic(month.from)}
+				{#if recordsLoading}
+					<Icon name="progress_activity" class="animate-spin text-sm text-primary" />
+				{/if}
+			</span>
+			<span class="mt-0.5 flex items-center gap-1 text-[10px] text-primary">
+				<Icon name="calendar_month" class="text-sm" /> تغيير الشهر
+			</span>
+			<input
+				type="month"
+				value={monthInputValue(date)}
+				min={monthInputValue(historyMin)}
+				max={currentMonthKey}
+				onchange={(e) => e.currentTarget.value && goToMonth(`${e.currentTarget.value}-01`)}
+				class="sr-only"
+				aria-label="اختيار الشهر"
+			/>
+		</label>
+		<button
+			onclick={() => goToMonth(addMonths(month.from, 1))}
+			disabled={isCurrentMonth}
+			class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-container-low text-primary active:scale-95 disabled:opacity-30"
+			aria-label="الشهر التالي"
 		>
 			<Icon name="chevron_left" />
 		</button>
@@ -429,7 +549,18 @@
 	</div>
 {/snippet}
 
-<TopBar title={halaqah?.name ?? 'الحلقة'} subtitle="إدارة الحلقة" backHref="/halaqat" />
+<TopBar title={halaqah?.name ?? 'الحلقة'} subtitle="إدارة الحلقة" backHref="/halaqat">
+	{#snippet actions()}
+		<button
+			onclick={refresh}
+			disabled={refreshing}
+			class="rounded-full p-2 transition hover:bg-white/10 active:scale-95 disabled:opacity-60"
+			aria-label="تحديث البيانات"
+		>
+			<Icon name="refresh" class={cn('text-2xl', refreshing && 'animate-spin')} />
+		</button>
+	{/snippet}
+</TopBar>
 
 <main class="mx-auto max-w-2xl px-4 pb-28 pt-20" dir="rtl">
 	{#if status === 'loading'}
@@ -460,8 +591,9 @@
 				hint="لا يوجد طلاب مسجّلون في هذه الحلقة."
 			/>
 		{:else if tab === 'overview'}
-			<!-- ===== Overview: stats + heatmap ===== -->
+			<!-- ===== Overview: month picker + stats + heatmap ===== -->
 			<div class="space-y-4">
+				{@render monthBar()}
 				<div class="grid grid-cols-2 gap-3">
 					<div
 						class="rounded-[1.5rem] border border-outline-variant/15 bg-surface-container-lowest p-4 shadow-sm"
@@ -475,10 +607,15 @@
 						class="rounded-[1.5rem] border border-outline-variant/15 bg-surface-container-lowest p-4 shadow-sm"
 					>
 						<div class="flex items-center gap-1.5 text-[11px] text-on-surface-variant/70">
-							<Icon name="event_available" class="text-sm text-primary" /> سُجِّل اليوم
+							<Icon name="event_available" class="text-sm text-primary" />
+							{isCurrentMonth ? 'سُجِّل اليوم' : 'أيام مُسجَّلة'}
 						</div>
 						<p class="mt-1 font-jakarta text-2xl font-bold text-on-surface">
-							{stats.todayCount}/{students.length}
+							{#if isCurrentMonth}
+								{stats.todayCount}/{students.length}
+							{:else}
+								{arabicNum(stats.recordedDays)}
+							{/if}
 						</p>
 					</div>
 					<div

@@ -21,10 +21,11 @@
 		RATING_OPTIONS,
 		computeScores,
 		parseRevisions,
+		ratingLabel,
 		serializeRevisions,
 		type RevisionRow
 	} from '$lib/labels';
-	import { arabicNum, formatDateArabic, todayIso } from '$lib/utils';
+	import { addMonths, arabicNum, formatDateArabic, formatDateShort, todayIso } from '$lib/utils';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
@@ -42,6 +43,37 @@
 	let settings = $state<ScoringSettings | null>(null);
 	let record = $state<DailyRecord | null>(null);
 	let allProblems = $state<Problem[]>([]);
+	// The student's most recent exam and the homework they were told to prepare —
+	// shown for reference right on this page (even if they fall in an earlier month).
+	let prevRecitation = $state<DailyRecord | null>(null);
+	let requiredHomework = $state<string | null>(null);
+
+	/** A record counts as a recitation once it carries an exam, rating, or revision. */
+	function hasRecitation(r: DailyRecord): boolean {
+		return (
+			r.rating != null ||
+			!!r.revision_lesson ||
+			r.exam_total != null ||
+			r.exam_to != null ||
+			r.exam_from != null
+		);
+	}
+
+	/** Short Arabic summary of what was recited (exam range and/or revision). */
+	function reciteSummary(r: DailyRecord): string {
+		const bits: string[] = [];
+		if (r.exam_from != null && r.exam_to != null) {
+			bits.push(`من ${arabicNum(r.exam_from)} إلى ${arabicNum(r.exam_to)}`);
+		} else if (r.exam_to != null) {
+			bits.push(`إلى ${arabicNum(r.exam_to)}`);
+		} else if (r.exam_from != null) {
+			bits.push(`من ${arabicNum(r.exam_from)}`);
+		} else if (r.exam_total != null) {
+			bits.push(`${arabicNum(r.exam_total)} صفحة`);
+		}
+		if (r.revision_lesson) bits.push('مراجعة');
+		return bits.join(' · ') || '—';
+	}
 
 	let form = $state({
 		exam_from: '',
@@ -92,16 +124,25 @@
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
-			const [s, rec, scoring, probs] = await Promise.all([
+			const [s, rec, scoring, probs, history] = await Promise.all([
 				repo.getStudent(studentId),
 				repo.getDayRecord(studentId, date),
 				repo.getScoring(),
-				repo.listProblems()
+				repo.listProblems(),
+				repo.listStudentRecords(studentId, addMonths(date, -3), date)
 			]);
 			student = s;
 			settings = scoring;
 			allProblems = probs;
 			record = rec;
+
+			// Reference data: last exam + the homework assigned before today.
+			const prior = history
+				.filter((r) => r.record_date < date)
+				.sort((a, b) => b.record_date.localeCompare(a.record_date));
+			prevRecitation = prior.find(hasRecitation) ?? null;
+			requiredHomework =
+				prior.find((r) => r.homework && r.homework.trim() !== '')?.homework ?? null;
 			if (record) {
 				form = {
 					exam_from: record.exam_from?.toString() ?? '',
@@ -137,7 +178,8 @@
 	}
 
 	function addRevision() {
-		revisions = [...revisions, { part: 1, half: 1, success: true }];
+		// Default the review to the whole juzʼ (كله).
+		revisions = [...revisions, { part: 1, half: 0, success: true }];
 	}
 	function removeRevision(i: number) {
 		revisions = revisions.filter((_, idx) => idx !== i);
@@ -224,6 +266,42 @@
 				<span class="text-xs font-medium">نقطة</span>
 			</div>
 		</section>
+
+		<!-- التسميع السابق والوظيفة المطلوبة -->
+		{#if prevRecitation || requiredHomework}
+			<section
+				class="space-y-3 rounded-[2rem] border border-outline-variant/15 bg-primary/5 p-5 shadow-card"
+			>
+				<div class="flex items-center gap-1.5">
+					<Icon name="history" class="text-base text-primary" />
+					<span class="text-[13px] font-bold text-on-surface-variant">المطلوب اليوم</span>
+				</div>
+				<div class="flex items-stretch gap-3">
+					<div class="min-w-0 flex-1">
+						<p class="text-[11px] font-medium text-on-surface-variant/50">آخر تسميع</p>
+						{#if prevRecitation}
+							<p class="truncate text-[13px] font-bold text-on-surface">
+								{reciteSummary(prevRecitation)}
+							</p>
+							<p class="mt-0.5 text-[10px] text-on-surface-variant/60">
+								{formatDateShort(prevRecitation.record_date)}{prevRecitation.rating != null
+									? ` · ${ratingLabel(prevRecitation.rating)}`
+									: ''}
+							</p>
+						{:else}
+							<p class="text-[13px] font-bold text-on-surface-variant/40">لا يوجد</p>
+						{/if}
+					</div>
+					<div class="w-px self-stretch bg-outline-variant/30"></div>
+					<div class="min-w-0 flex-1">
+						<p class="text-[11px] font-medium text-on-surface-variant/50">الوظيفة المطلوبة</p>
+						<p class="text-[13px] font-bold text-on-surface">
+							{requiredHomework ?? 'لا يوجد واجب'}
+						</p>
+					</div>
+				</div>
+			</section>
+		{/if}
 
 		<!-- التسميع -->
 		<section

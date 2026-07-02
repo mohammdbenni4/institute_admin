@@ -170,6 +170,43 @@ export async function listMonthRecords(
 		.toArray();
 }
 
+/** All of one student's records in a date window (network-first, cache fallback).
+ * Used to surface a student's most recent recitation/homework even when it falls
+ * in an earlier month than the one being viewed. */
+export async function listStudentRecords(
+	studentId: string,
+	from: string,
+	to: string
+): Promise<DailyRecord[]> {
+	if (net.online) {
+		try {
+			const PAGE = 200;
+			let items: DailyRecord[] = [];
+			let offset = 0;
+			for (;;) {
+				const res = await dailyRecordsApi.list({
+					student_id: studentId,
+					date_from: from,
+					date_to: to,
+					limit: PAGE,
+					offset
+				});
+				items = items.concat(res.items);
+				offset += PAGE;
+				if (items.length >= res.total || res.items.length === 0) break;
+			}
+			await mergeServerRecords(items);
+		} catch (e) {
+			if (!isNetworkError(e)) throw e;
+		}
+	}
+	return db.records
+		.where('student_id')
+		.equals(studentId)
+		.and((r) => r.record_date >= from && r.record_date <= to)
+		.toArray();
+}
+
 export async function getDayRecord(studentId: string, date: string): Promise<DailyRecord | null> {
 	if (net.online) {
 		try {

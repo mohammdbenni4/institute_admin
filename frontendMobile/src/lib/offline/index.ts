@@ -4,6 +4,7 @@ export { net } from './net.svelte';
 export { syncState, refreshPending } from './state.svelte';
 export { syncNow } from './sync';
 export { clearOfflineData } from './db';
+export { listPendingChanges, type PendingChange } from './pending';
 export * as repo from './repo';
 
 import { onReconnect, startNetworkWatch } from './net.svelte';
