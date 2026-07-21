@@ -126,7 +126,7 @@
 	}
 
 	.kpi-card {
-		@apply glass-card p-5 transition-all duration-200 hover:shadow-md;
+		@apply glass-card p-4 transition-all duration-200 hover:shadow-md sm:p-5;
 	}
 
 	.page-container {

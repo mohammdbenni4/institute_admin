@@ -52,9 +52,9 @@
 
 	const columns: Column[] = [
 		{ key: 'full_name', label: 'الاسم' },
-		{ key: 'email', label: 'البريد الإلكتروني' },
-		{ key: 'role', label: 'الدور' },
-		{ key: 'date_of_birth', label: 'تاريخ الميلاد' },
+		{ key: 'email', label: 'البريد الإلكتروني', class: 'hidden md:table-cell' },
+		{ key: 'role', label: 'الدور', class: 'hidden sm:table-cell' },
+		{ key: 'date_of_birth', label: 'تاريخ الميلاد', class: 'hidden lg:table-cell' },
 		{ key: 'is_active', label: 'الحالة' },
 		{ key: 'actions', label: 'إجراءات', class: 'w-px' }
 	];

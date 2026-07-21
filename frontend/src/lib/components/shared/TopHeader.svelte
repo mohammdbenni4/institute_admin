@@ -23,10 +23,11 @@
 <header
 	class="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-border bg-card px-4"
 >
-	<div class="flex items-center gap-3">
+	<div class="flex min-w-0 items-center gap-2">
 		<Button variant="ghost" size="icon" class="lg:hidden" onclick={onToggleSidebar}>
 			<Menu class="h-5 w-5" />
 		</Button>
+		<span class="truncate text-sm font-bold text-foreground lg:hidden">معهد القرآن</span>
 	</div>
 
 	<div class="flex items-center gap-2">

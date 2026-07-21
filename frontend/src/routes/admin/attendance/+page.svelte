@@ -321,7 +321,7 @@
 	}
 </script>
 
-<div class="space-y-5" dir="rtl">
+<div class="space-y-5 p-4 md:p-6 lg:p-8" dir="rtl">
 	<!-- ─── Header + month nav ─── -->
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 		<PageHeader
@@ -358,7 +358,7 @@
 
 	<!-- ─── Sticky filter bar ─── -->
 	<div
-		class="sticky top-0 z-30 rounded-2xl border border-border bg-card/95 p-3 shadow-md backdrop-blur-sm"
+		class="sticky top-14 z-30 rounded-2xl border border-border bg-card/95 p-3 shadow-md backdrop-blur-sm"
 	>
 		<div class="flex flex-wrap items-center gap-2">
 			<div class="relative min-w-[160px] flex-1">

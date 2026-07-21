@@ -219,10 +219,10 @@
 
 	const columns: Column[] = [
 		{ key: 'full_name', label: 'اسم الطالب' },
-		{ key: 'father_name', label: 'اسم الأب' },
-		{ key: 'father_number', label: 'جوال الأب' },
-		{ key: 'halaqah_id', label: 'الحلقة' },
-		{ key: 'accepted_at', label: 'تاريخ القبول' },
+		{ key: 'father_name', label: 'اسم الأب', class: 'hidden md:table-cell' },
+		{ key: 'father_number', label: 'جوال الأب', class: 'hidden lg:table-cell' },
+		{ key: 'halaqah_id', label: 'الحلقة', class: 'hidden sm:table-cell' },
+		{ key: 'accepted_at', label: 'تاريخ القبول', class: 'hidden lg:table-cell' },
 		{ key: 'actions', label: 'إجراءات', class: 'w-px' }
 	];
 

@@ -88,9 +88,9 @@
 	</aside>
 
 	<!-- Main content -->
-	<div class="flex min-h-screen flex-1 flex-col">
+	<div class="flex min-h-screen min-w-0 flex-1 flex-col">
 		<TopHeader {userName} {roleName} onToggleSidebar={() => (sidebarOpen = true)} />
-		<main class="flex-1">
+		<main class="min-w-0 flex-1">
 			{@render children()}
 		</main>
 	</div>

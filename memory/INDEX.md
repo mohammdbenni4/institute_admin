@@ -7,6 +7,7 @@ anyone (and any future AI session) can read the project's history quickly.
 > They live in the machine-local memory (`~/.claude/projects/.../memory/`), not here.
 
 ## Sessions
+- [2026-07-02](sessions/2026-07-02.md) — mobile month navigation (heatmap/stats/exam), previous-recitation-after-month-rollover fix, "المطلوب اليوم" card, refresh button, **SyncStatus** pill + per-change old→new diff & delete-with-confirm (baseline snapshots), attendance no-default, quit button; two VPS deploys + branded-icon APK (versionCode `YYYYMMDD`); deploy settings moved to origin so merges stop conflicting.
 - [2026-06-23](sessions/2026-06-23.md) — revision points, problems (الصعوبات) module, admin attendance heatmap page, Excel student import, dark theme, negative scoring weights, mobile 3-tab restructure (الحضور / التسميع والمراجعة) + dark-green theme, **first VPS deploy**.
 - [2026-06-22](sessions/2026-06-22.md) — daily_records, teacher mobile app, admin analytics/profiles, teacher scoping, bulk attendance, configurable scoring, halaqah filters, WhatsApp link.
 
@@ -32,7 +33,7 @@ anyone (and any future AI session) can read the project's history quickly.
 
 ## Code knowledge graph (graphify)
 A queryable map of the codebase lives in `graphify-out/` (built with `graphify`, no API cost):
-- `graph.json` — 1641 nodes / 3239 edges / 123 communities (functions, classes, modules + relations).
+- `graph.json` — 2741 nodes / 6144 edges / 206 communities (functions, classes, modules + relations; refreshed 2026-07-02 via `graphify update .`).
 - `GRAPH_REPORT.md` — human-readable community/navigation report.
 - `graph.html` — interactive visualization (open in a browser).
 

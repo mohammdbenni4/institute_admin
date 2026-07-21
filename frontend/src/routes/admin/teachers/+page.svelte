@@ -50,10 +50,10 @@
 
 	const columns: Column[] = [
 		{ key: 'full_name', label: 'الاسم' },
-		{ key: 'email', label: 'البريد الإلكتروني' },
-		{ key: 'academic_study', label: 'المؤهل الأكاديمي' },
-		{ key: 'islamic_study', label: 'المؤهل الشرعي' },
-		{ key: 'is_assistant', label: 'مساعد' },
+		{ key: 'email', label: 'البريد الإلكتروني', class: 'hidden md:table-cell' },
+		{ key: 'academic_study', label: 'المؤهل الأكاديمي', class: 'hidden lg:table-cell' },
+		{ key: 'islamic_study', label: 'المؤهل الشرعي', class: 'hidden xl:table-cell' },
+		{ key: 'is_assistant', label: 'مساعد', class: 'hidden sm:table-cell' },
 		{ key: 'is_active', label: 'الحالة' },
 		{ key: 'actions', label: 'إجراءات', class: 'w-px' }
 	];

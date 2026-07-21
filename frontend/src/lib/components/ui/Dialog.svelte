@@ -47,14 +47,14 @@
 		<!-- Content -->
 		<div
 			class={cn(
-				'relative z-10 w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-lg',
+				'relative z-10 flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-lg',
 				className
 			)}
 			role="dialog"
 			aria-modal="true"
 			transition:scale={{ duration: 150, start: 0.96 }}
 		>
-			<div class="mb-4 flex items-start justify-between gap-4">
+			<div class="flex items-start justify-between gap-4 border-b border-border/60 p-4 sm:p-5">
 				{#if header}
 					{@render header()}
 				{:else if title}
@@ -65,13 +65,15 @@
 				<button
 					type="button"
 					onclick={close}
-					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					aria-label="إغلاق"
 				>
 					<X class="h-4 w-4" />
 				</button>
 			</div>
-			{@render children?.()}
+			<div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+				{@render children?.()}
+			</div>
 		</div>
 	</div>
 {/if}

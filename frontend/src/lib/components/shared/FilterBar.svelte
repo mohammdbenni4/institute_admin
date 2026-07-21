@@ -35,8 +35,8 @@
 	}: Props = $props();
 </script>
 
-<div class="flex flex-col flex-wrap items-start gap-3 sm:flex-row sm:items-center">
-	<div class="relative min-w-[200px] flex-1">
+<div class="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+	<div class="relative w-full sm:w-auto sm:min-w-[200px] sm:flex-1">
 		<Search class="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 		<Input bind:value={searchValue} placeholder={searchPlaceholder} class="pr-9" />
 	</div>
@@ -44,7 +44,7 @@
 	{#if filters}
 		{#each filters as filter, i (i)}
 			<Select
-				class="w-[160px]"
+				class="w-full sm:w-40"
 				placeholder={filter.label}
 				value={filter.value ?? ''}
 				onChange={filter.onChange}
@@ -58,7 +58,7 @@
 	{/if}
 
 	{#if onExport}
-		<Button variant="outline" size="sm" onclick={onExport}>
+		<Button variant="outline" size="sm" class="w-full sm:w-auto" onclick={onExport}>
 			<Download class="h-4 w-4" />
 			{exportLabel}
 		</Button>

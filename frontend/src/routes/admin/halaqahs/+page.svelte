@@ -68,9 +68,9 @@
 
 	const columns: Column[] = [
 		{ key: 'name', label: 'اسم الحلقة' },
-		{ key: 'teacher_name', label: 'المعلم' },
-		{ key: 'halaqah_type_name', label: 'النوع' },
-		{ key: 'level', label: 'المستوى' },
+		{ key: 'teacher_name', label: 'المعلم', class: 'hidden sm:table-cell' },
+		{ key: 'halaqah_type_name', label: 'النوع', class: 'hidden md:table-cell' },
+		{ key: 'level', label: 'المستوى', class: 'hidden lg:table-cell' },
 		{ key: 'number_of_students', label: 'عدد الطلاب' },
 		{ key: 'actions', label: 'إجراءات', class: 'w-px' }
 	];
