@@ -24,6 +24,7 @@ from institute_administration.modules.halaqahs.models import HalaqahModel
 from institute_administration.modules.identity.models import UserModel
 from institute_administration.modules.students.models import StudentModel
 from institute_administration.modules.teachers.models import TeacherModel
+from institute_administration.modules.times.models import TimeModel
 from institute_administration.shared.application.pagination import Page
 
 _student_count = (
@@ -48,7 +49,20 @@ def _entity(model: HalaqahModel) -> Halaqah:
     )
 
 
-def _view(model: HalaqahModel, teacher_name: str, type_name: str, count: int) -> HalaqahView:
+def _schedule(time_model: TimeModel | None) -> dict[str, dict[str, str]]:
+    """Only the days that actually have a session, as ``{"from", "to"}`` pairs."""
+    if time_model is None:
+        return {}
+    return {day: value for day, value in time_model.day_values().items() if value}
+
+
+def _view(
+    model: HalaqahModel,
+    teacher_name: str,
+    type_name: str,
+    count: int,
+    time_model: TimeModel | None = None,
+) -> HalaqahView:
     return HalaqahView(
         id=model.id,
         name=model.name,
@@ -59,6 +73,8 @@ def _view(model: HalaqahModel, teacher_name: str, type_name: str, count: int) ->
         halaqah_type_id=model.halaqah_type_id,
         halaqah_type_name=type_name,
         time_id=model.time_id,
+        time_name=time_model.name if time_model else None,
+        schedule=_schedule(time_model),
         number_of_students=count,
         created_at=model.created_at,
         updated_at=model.updated_at,
@@ -70,17 +86,19 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
         self._session = session
         self._order_collation = get_settings().arabic_collation
 
-    def _view_select(self) -> Select[tuple[HalaqahModel, str, str, int]]:
+    def _view_select(self) -> Select[tuple[HalaqahModel, str, str, int, TimeModel | None]]:
         return (
             select(
                 HalaqahModel,
                 UserModel.full_name,
                 HalaqahTypeModel.name,
                 _student_count.label("number_of_students"),
+                TimeModel,
             )
             .join(TeacherModel, HalaqahModel.teacher_id == TeacherModel.id)
             .join(UserModel, TeacherModel.user_id == UserModel.id)
             .join(HalaqahTypeModel, HalaqahModel.halaqah_type_id == HalaqahTypeModel.id)
+            .outerjoin(TimeModel, HalaqahModel.time_id == TimeModel.id)
         )
 
     async def add(self, halaqah: Halaqah) -> None:
@@ -118,7 +136,7 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
             self._view_select().where(HalaqahModel.id == halaqah_id)
         )
         row = result.first()
-        return _view(row[0], row[1], row[2], row[3]) if row else None
+        return _view(row[0], row[1], row[2], row[3], row[4]) if row else None
 
     async def list_views(self, page: Page, *, teacher_id: UUID | None = None) -> list[HalaqahView]:
         stmt = self._view_select()
@@ -129,7 +147,7 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
             .limit(page.limit)
             .offset(page.offset)
         )
-        return [_view(row[0], row[1], row[2], row[3]) for row in result.all()]
+        return [_view(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]
 
     async def count(self, *, teacher_id: UUID | None = None) -> int:
         stmt = select(func.count()).select_from(HalaqahModel)

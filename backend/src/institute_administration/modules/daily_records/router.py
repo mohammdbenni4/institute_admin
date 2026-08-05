@@ -25,16 +25,21 @@ from institute_administration.modules.daily_records.repository import (
 from institute_administration.modules.daily_records.schemas import (
     BulkAttendanceRequest,
     BulkAttendanceResponse,
+    BulkUpsertRequest,
+    BulkUpsertResponse,
     DailyRecordCreateRequest,
     DailyRecordListResponse,
     DailyRecordResponse,
     DailyRecordUpdateRequest,
+    LatestRecitationItem,
+    LatestRecitationsResponse,
 )
 from institute_administration.modules.daily_records.service import (
     BulkAttendanceEntry,
     CreateDailyRecordInput,
     DailyRecordService,
     UpdateDailyRecordInput,
+    UpsertDailyRecordEntry,
 )
 from institute_administration.modules.identity.dependencies import (
     get_current_user,
@@ -43,6 +48,7 @@ from institute_administration.modules.identity.dependencies import (
 from institute_administration.modules.identity.domain import User, UserRole
 from institute_administration.modules.problems.repository import SqlAlchemyProblemRepository
 from institute_administration.modules.scoring.repository import SqlAlchemyScoringSettingsRepository
+from institute_administration.modules.students.repository import SqlAlchemyStudentRepository
 from institute_administration.shared.application.exceptions import AuthorizationError
 from institute_administration.shared.application.pagination import Page
 
@@ -83,6 +89,7 @@ async def _to_list_response(
         limit=limit,
         offset=offset,
     )
+
 
 # Writes are allowed for teachers and super admins.
 CurrentWriter = Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.TEACHER))]
@@ -137,9 +144,88 @@ async def bulk_attendance(
         halaqah_id=payload.halaqah_id,
         teacher_id=teacher_id,
         record_date=record_date,
-        entries=[BulkAttendanceEntry(e.student_id, e.present, e.excused) for e in payload.entries],
+        entries=[
+            BulkAttendanceEntry(e.student_id, e.present, e.excused, e.late, e.excuse_reason)
+            for e in payload.entries
+        ],
     )
     return BulkAttendanceResponse(record_date=record_date, created=created, updated=updated)
+
+
+@router.post(
+    "/bulk-upsert",
+    response_model=BulkUpsertResponse,
+    summary="رفع دفعة سجلات (إنشاء أو تحديث حسب الطالب والتاريخ)",
+)
+async def bulk_upsert(
+    payload: BulkUpsertRequest,
+    service: ServiceDep,
+    scope: ScopeDep,
+    session: DbSession,
+    _: CurrentWriter,
+) -> BulkUpsertResponse:
+    teacher_id = payload.teacher_id
+    if not scope.is_admin:
+        if not scope.allows_halaqah(payload.halaqah_id):
+            raise AuthorizationError(_FORBIDDEN)
+        assert scope.teacher_id is not None
+        teacher_id = scope.teacher_id
+    records, created, updated = await service.bulk_upsert(
+        halaqah_id=payload.halaqah_id,
+        teacher_id=teacher_id,
+        entries=[UpsertDailyRecordEntry(**item.model_dump()) for item in payload.records],
+    )
+    listed = await _to_list_response(records, session, len(records), len(records), 0)
+    return BulkUpsertResponse(items=listed.items, created=created, updated=updated)
+
+
+@router.get(
+    "/latest-recitations",
+    response_model=LatestRecitationsResponse,
+    summary="آخر تسميع وآخر واجب لكل طالب",
+)
+async def latest_recitations(
+    service: ServiceDep,
+    scope: ScopeDep,
+    session: DbSession,
+    student_ids: Annotated[
+        list[UUID], Query(description="معرّفات الطلاب", min_length=1, max_length=200)
+    ],
+    before: Annotated[
+        date | None, Query(description="آخر تسميع قبل هذا التاريخ (غير شامل)")
+    ] = None,
+) -> LatestRecitationsResponse:
+    # Authorise by *student*, not by the halaqah stored on the old record: a student
+    # who moved between halaqahs would otherwise lose their whole exam history to
+    # their new teacher, showing «لم يُسجّل تسميع بعد» forever.
+    if not scope.is_admin:
+        students = SqlAlchemyStudentRepository(session)
+        allowed = {
+            sid
+            for sid in student_ids
+            if (student := await students.get_by_id(sid)) is not None
+            and scope.allows_halaqah(student.halaqah_id)
+        }
+        student_ids = [sid for sid in student_ids if sid in allowed]
+        if not student_ids:
+            return LatestRecitationsResponse(items=[])
+
+    recitations, homework = await service.latest_recitations(student_ids, before=before)
+
+    resolved = await _to_list_response(
+        list(recitations.values()), session, len(recitations), max(len(recitations), 1), 0
+    )
+    by_student = {item.student_id: item for item in resolved.items}
+    return LatestRecitationsResponse(
+        items=[
+            LatestRecitationItem(
+                student_id=sid,
+                last_recitation=by_student.get(sid),
+                homework=homework.get(sid),
+            )
+            for sid in student_ids
+        ]
+    )
 
 
 @router.get("", response_model=DailyRecordListResponse, summary="قائمة السجلات اليومية")

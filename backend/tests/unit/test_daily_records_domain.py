@@ -9,10 +9,10 @@ import pytest
 
 from institute_administration.modules.daily_records.domain import (
     DailyRecord,
-    InvalidAddedPointsError,
     InvalidAttitudeError,
     InvalidExamRangeError,
     InvalidRatingError,
+    LateWhileAbsentError,
 )
 
 pytestmark = pytest.mark.unit
@@ -94,9 +94,31 @@ def test_negative_exam_value_is_rejected() -> None:
         _make(exam_from=-1)
 
 
-def test_negative_added_points_is_rejected() -> None:
-    with pytest.raises(InvalidAddedPointsError):
-        _make(added_points=-3)
+def test_added_points_may_be_negative() -> None:
+    """Teachers deduct as well as award («إضافة النقاط وحذفها بشكل كامل»)."""
+    record = _make(present=True, added_points=-3)
+    assert record.added_points == -3
+    assert record.total_points == 2  # 5 present - 3 deducted
+
+
+def test_total_points_may_go_below_zero_when_deductions_exceed_earnings() -> None:
+    assert _make(present=False, added_points=-4).total_points == -4
+
+
+def test_late_student_is_still_present_and_scores_the_late_weight() -> None:
+    record = _make(present=True, late=True)
+    assert record.present is True
+    assert record.card_present == 5  # DEFAULT_SCORING prices late the same as present
+
+
+def test_late_cannot_be_recorded_for_an_absent_student() -> None:
+    with pytest.raises(LateWhileAbsentError):
+        _make(present=False, late=True)
+
+
+def test_excuse_reason_is_carried_on_the_record() -> None:
+    record = _make(present=False, excused=True, excuse_reason="سفر مع العائلة")
+    assert record.excuse_reason == "سفر مع العائلة"
 
 
 def test_revalidate_catches_post_mutation_violation() -> None:

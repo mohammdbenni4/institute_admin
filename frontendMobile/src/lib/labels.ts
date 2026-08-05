@@ -3,7 +3,6 @@
 // The backend remains authoritative; these are for preview only.
 
 import type { Attitude, DailyRecord, Rating, ScoringSettings } from './api/types';
-import { arabicNum } from './utils';
 
 export const RATING_OPTIONS: { value: Rating; label: string }[] = [
 	{ value: 4, label: 'ممتاز' },
@@ -70,6 +69,7 @@ export function computeScores(
 	input: {
 		present: boolean;
 		excused?: boolean;
+		late?: boolean;
 		rating: number | null;
 		revision_rating?: number | null;
 		attitude: number | null;
@@ -79,7 +79,8 @@ export function computeScores(
 ): CardScores {
 	let present: number;
 	if (input.present) {
-		present = s?.present_points ?? 5;
+		// «متأخر» is priced separately, defaulting to the on-time weight.
+		present = input.late ? (s?.late_points ?? s?.present_points ?? 5) : (s?.present_points ?? 5);
 	} else if (input.excused) {
 		present = s?.excused_points ?? 0;
 	} else {
@@ -138,11 +139,13 @@ export function halfLabel(half: RevisionHalf): string {
 	return half === 0 ? 'كله' : half === 1 ? 'النصف الأول' : 'النصف الثاني';
 }
 
-/** Serialise revision rows into the Arabic message saved to `revision_lesson`. */
+/** Serialise revision rows into the Arabic message saved to `revision_lesson`.
+ *  Digits are Latin; `parseRevisions` still reads the Arabic-Indic form written by
+ *  older app versions. */
 export function serializeRevisions(rows: RevisionRow[]): string | null {
 	if (rows.length === 0) return null;
 	return rows
-		.map((r) => `الجزء ${arabicNum(r.part)} (${halfLabel(r.half)}): ${r.success ? 'نجح' : 'أخفق'}`)
+		.map((r) => `الجزء ${r.part} (${halfLabel(r.half)}): ${r.success ? 'نجح' : 'أخفق'}`)
 		.join('، ');
 }
 

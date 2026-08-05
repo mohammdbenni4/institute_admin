@@ -5,8 +5,14 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
+from institute_administration.api.rate_limit import (
+    client_key,
+    limiter,
+    login_throttle,
+    refresh_throttle,
+)
 from institute_administration.modules.identity.dependencies import (
     AuthServiceDep,
     CurrentUser,
@@ -34,13 +40,26 @@ from institute_administration.modules.identity.service import (
 auth_router = APIRouter(prefix="/auth", tags=["المصادقة"])
 
 
-@auth_router.post("/login", response_model=TokenResponse, summary="تسجيل الدخول")
-async def login(payload: LoginRequest, auth_service: AuthServiceDep) -> TokenResponse:
+@auth_router.post(
+    "/login",
+    response_model=TokenResponse,
+    summary="تسجيل الدخول",
+    dependencies=[Depends(login_throttle)],
+)
+async def login(
+    payload: LoginRequest, auth_service: AuthServiceDep, request: Request
+) -> TokenResponse:
     tokens = await auth_service.login(payload.email, payload.password)
+    limiter.reset(client_key(request, "login"))
     return TokenResponse(**tokens.__dict__)
 
 
-@auth_router.post("/refresh", response_model=TokenResponse, summary="تجديد رمز الوصول")
+@auth_router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="تجديد رمز الوصول",
+    dependencies=[Depends(refresh_throttle)],
+)
 async def refresh(payload: RefreshRequest, auth_service: AuthServiceDep) -> TokenResponse:
     tokens = await auth_service.refresh(payload.refresh_token)
     return TokenResponse(**tokens.__dict__)

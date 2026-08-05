@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ApiError, auth, type Halaqah } from '$lib/api';
+	import { errorMessage, auth, type Halaqah } from '$lib/api';
 	import { repo } from '$lib/offline';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
@@ -19,10 +19,11 @@
 		if (!teacher) return; // guard is redirecting to /login
 		status = 'loading';
 		try {
-			items = await repo.listHalaqahs(teacher.id);
+			// Cache-first: shows instantly offline, refreshes in place when the network answers.
+			items = await repo.listHalaqahs(teacher.id, { onFresh: (fresh) => (items = fresh) });
 			status = 'ready';
 		} catch (e) {
-			error = e instanceof ApiError ? e.message : 'تعذّر تحميل الحلقات';
+			error = errorMessage(e, 'تعذّر تحميل الحلقات');
 			status = 'error';
 		}
 	}

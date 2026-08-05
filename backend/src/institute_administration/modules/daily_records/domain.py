@@ -14,8 +14,10 @@ database can sort and aggregate on them.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from institute_administration.shared.application.pagination import Page
@@ -37,8 +39,9 @@ class ScoringPolicy:
     A record's ``card_*`` columns are a snapshot of the policy in force when it
     was written, so changing the policy never silently rewrites history.
 
-    Attendance contributes via three mutually exclusive states:
-      - present → ``present_points``
+    Attendance contributes via four mutually exclusive states:
+      - present and on time → ``present_points``
+      - present but late (متأخر) → ``late_points``
       - excused absence (أذن) → ``excused_points``
       - unexcused absence (غياب) → ``absent_points``
     """
@@ -46,13 +49,14 @@ class ScoringPolicy:
     present_points: int
     absent_points: int  # points for unexcused absence (typically 0)
     excused_points: int  # points for a legal/excused absence (أذن)
+    late_points: int  # points for arriving late (متأخر); defaults to the present value
     rating_points: dict[int, int]  # examination rating (1-4) -> card points
     revision_points: dict[int, int]  # revision/review rating (1-4) -> card points
     attitude_points: dict[int, int]  # behaviour rating (1-3) -> card points
 
-    def card_present(self, present: bool, excused: bool = False) -> int:
+    def card_present(self, present: bool, excused: bool = False, late: bool = False) -> int:
         if present:
-            return self.present_points
+            return self.late_points if late else self.present_points
         return self.excused_points if excused else self.absent_points
 
     def card_exam(self, rating: int | None) -> int:
@@ -66,7 +70,7 @@ class ScoringPolicy:
 
     def apply(self, record: DailyRecord) -> None:
         """Recompute and store the five card scores on ``record``."""
-        record.card_present = self.card_present(record.present, record.excused)
+        record.card_present = self.card_present(record.present, record.excused, record.late)
         record.card_exam = self.card_exam(record.rating)
         record.card_revision = self.card_revision(record.revision_rating)
         record.card_attitude = self.card_attitude(record.attitude)
@@ -83,11 +87,12 @@ DEFAULT_SCORING = ScoringPolicy(
     present_points=5,
     absent_points=0,
     excused_points=0,
+    late_points=5,
     rating_points={4: 7, 3: 5, 2: 3, 1: 0},
     revision_points={4: 7, 3: 5, 2: 3, 1: 0},
     attitude_points={3: 3, 2: 2, 1: 1},
 )
-"""Built-in weights: present=5; absent/excused=0; rating+revision 4/3/2→7/5/3."""
+"""Built-in weights: present/late=5; absent/excused=0; rating+revision 4/3/2→7/5/3."""
 
 
 class DailyRecord(AggregateRoot[UUID]):
@@ -103,9 +108,11 @@ class DailyRecord(AggregateRoot[UUID]):
         record_date: date,
         present: bool,
         excused: bool = False,
+        late: bool = False,
+        excuse_reason: str | None = None,
         exam_from: int | None = None,
         exam_to: int | None = None,
-        exam_total: int | None = None,
+        exam_total: Decimal | float | None = None,
         homework: str | None = None,
         problems: str | None = None,
         rating: int | None = None,
@@ -130,9 +137,12 @@ class DailyRecord(AggregateRoot[UUID]):
         self.record_date = record_date
         self.present = present
         self.excused = excused
+        self.late = late
+        self.excuse_reason = excuse_reason
         self.exam_from = exam_from
         self.exam_to = exam_to
-        self.exam_total = exam_total
+        # Normalised to Decimal so equality and persistence behave predictably.
+        self.exam_total = Decimal(str(exam_total)) if exam_total is not None else None
         self.homework = homework
         self.problems = problems
         self.rating = rating
@@ -172,9 +182,11 @@ class DailyRecord(AggregateRoot[UUID]):
         record_date: date,
         present: bool,
         excused: bool = False,
+        late: bool = False,
+        excuse_reason: str | None = None,
         exam_from: int | None = None,
         exam_to: int | None = None,
-        exam_total: int | None = None,
+        exam_total: Decimal | float | None = None,
         homework: str | None = None,
         problems: str | None = None,
         rating: int | None = None,
@@ -193,6 +205,8 @@ class DailyRecord(AggregateRoot[UUID]):
             record_date=record_date,
             present=present,
             excused=excused,
+            late=late,
+            excuse_reason=excuse_reason,
             exam_from=exam_from,
             exam_to=exam_to,
             exam_total=exam_total,
@@ -222,6 +236,10 @@ class DailyRecord(AggregateRoot[UUID]):
     def _validate(self) -> None:
         if self.present and self.excused:
             raise ExcusedWhilePresentError
+        # «متأخر» is a qualifier on attendance, not a fourth kind of absence: a
+        # student who did not attend cannot be late.
+        if self.late and not self.present:
+            raise LateWhileAbsentError
         if self.rating is not None and not RATING_MIN <= self.rating <= RATING_MAX:
             raise InvalidRatingError
         if (
@@ -234,14 +252,15 @@ class DailyRecord(AggregateRoot[UUID]):
         for value in (self.exam_from, self.exam_to, self.exam_total):
             if value is not None and value < 0:
                 raise InvalidExamRangeError("قيم الاختبار يجب ألا تكون سالبة")
+        if self.exam_total is not None and self.exam_total > Decimal("999.99"):
+            raise InvalidExamRangeError("العدد الكلي أكبر من الحد المسموح")
         if (
             self.exam_from is not None
             and self.exam_to is not None
             and self.exam_to < self.exam_from
         ):
             raise InvalidExamRangeError
-        if self.added_points < 0:
-            raise InvalidAddedPointsError
+        # `added_points` is deliberately signed: teachers award *and* deduct points.
 
 
 class DailyRecordRepository(ABC):
@@ -280,6 +299,37 @@ class DailyRecordRepository(ABC):
         date_from: date | None = None,
         date_to: date | None = None,
     ) -> int: ...
+
+    @abstractmethod
+    async def find_by_natural_keys(
+        self, keys: Sequence[tuple[UUID, date]]
+    ) -> dict[tuple[UUID, date], DailyRecord]:
+        """Look up many records at once by their ``(student_id, record_date)`` key.
+
+        Backs the idempotent bulk upsert: the mobile app knows a record by its
+        natural key, not by the server id it never saw.
+        """
+
+    @abstractmethod
+    async def latest_recitations(
+        self, student_ids: Sequence[UUID], *, before: date | None = None
+    ) -> dict[UUID, DailyRecord]:
+        """The most recent record carrying a recitation, per student.
+
+        A recitation is any record with a rating, an exam range/total, or a
+        revision lesson. Unbounded in time on purpose: a student's last recitation
+        must still surface after a long absence.
+        """
+
+    @abstractmethod
+    async def latest_homework(
+        self, student_ids: Sequence[UUID], *, before: date | None = None
+    ) -> dict[UUID, str]:
+        """The most recently assigned, non-empty homework per student.
+
+        Shares the ``before`` cut-off with :meth:`latest_recitations` so both halves
+        of «المطلوب اليوم» always describe the same point in time.
+        """
 
     @abstractmethod
     async def delete(self, record: DailyRecord) -> None: ...
@@ -327,6 +377,16 @@ class InvalidExamRangeError(BusinessRuleViolationError):
 
 class InvalidAddedPointsError(BusinessRuleViolationError):
     def __init__(self, message: str = "النقاط المضافة يجب ألا تكون سالبة") -> None:
+        super().__init__(message)
+
+
+class LateWhileAbsentError(BusinessRuleViolationError):
+    def __init__(self, message: str = "لا يمكن تسجيل تأخير لطالب غير حاضر") -> None:
+        super().__init__(message)
+
+
+class MissingExcuseReasonError(BusinessRuleViolationError):
+    def __init__(self, message: str = "يجب تسجيل سبب الإذن") -> None:
         super().__init__(message)
 
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly backup of the institute database
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+ExecStart=/usr/local/bin/quran-backup
+# Keep a record in the journal: journalctl -u quran-backup
+StandardOutput=journal
+StandardError=journal

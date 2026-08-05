@@ -20,6 +20,8 @@ class HalaqahResponse(BaseModel):
     halaqah_type_id: UUID
     halaqah_type_name: str
     time_id: UUID | None
+    time_name: str | None = None
+    schedule: dict[str, dict[str, str]] = {}
     number_of_students: int
     created_at: datetime
     updated_at: datetime
@@ -36,6 +38,8 @@ class HalaqahResponse(BaseModel):
             halaqah_type_id=view.halaqah_type_id,
             halaqah_type_name=view.halaqah_type_name,
             time_id=view.time_id,
+            time_name=view.time_name,
+            schedule=view.schedule,
             number_of_students=view.number_of_students,
             created_at=view.created_at,
             updated_at=view.updated_at,

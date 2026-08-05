@@ -146,17 +146,37 @@
 }
 
 @media print {
-	body * {
-		visibility: hidden;
+	@page {
+		size: A4 portrait;
+		margin: 8mm;
 	}
-	#print-report,
-	#print-report * {
-		visibility: visible;
+
+	/* The report moves itself to be a direct child of <body> (see MonthlyReport's
+	   `portal` action), so the whole app shell can simply be removed from the layout.
+	   Merely hiding it with `visibility` left it occupying space and spilled a blank
+	   sheet out of every print. */
+	body > *:not(#print-report) {
+		display: none !important;
 	}
+
+	/* The app's own page background otherwise prints as a grey block under the sheet. */
+	html,
+	body {
+		background: #fff !important;
+	}
+
 	#print-report {
-		position: absolute;
-		inset: 0;
-		padding: 1.5rem;
+		display: block !important;
 		direction: rtl;
+	}
+	#print-report * {
+		/* The institute's sheet is defined by its tinted table cells; browsers drop
+		   backgrounds when printing unless told otherwise. */
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+	/* Keep a section from being split across two sheets. */
+	#print-report table {
+		break-inside: avoid;
 	}
 }

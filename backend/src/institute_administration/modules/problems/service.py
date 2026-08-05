@@ -48,7 +48,7 @@ class ProblemLevelService:
             raise ProblemLevelNameAlreadyExistsError
         level = ProblemLevel.create(name=data.name)
         await self._levels.add(level)
-        return (await self._levels.get_by_id(level.id))  # type: ignore[return-value]
+        return await self._levels.get_by_id(level.id)  # type: ignore[return-value]
 
     async def get(self, level_id: UUID) -> ProblemLevel:
         level = await self._levels.get_by_id(level_id)
@@ -121,9 +121,7 @@ class ProblemService:
     async def get_by_ids(self, problem_ids: list[UUID]) -> list[Problem]:
         return await self._problems.get_by_ids(problem_ids)
 
-    async def list(
-        self, page: Page, *, level_id: UUID | None = None
-    ) -> tuple[list[Problem], int]:
+    async def list(self, page: Page, *, level_id: UUID | None = None) -> tuple[list[Problem], int]:
         return (
             await self._problems.list(page, level_id=level_id),
             await self._problems.count(level_id=level_id),

@@ -67,6 +67,9 @@ export interface Halaqah {
 	halaqah_type_id: UUID;
 	halaqah_type_name: string;
 	time_id: UUID | null;
+	time_name: string | null;
+	/** Weekday -> session window, only for days the halaqah actually meets. */
+	schedule: Record<string, { from: string; to: string }>;
 	number_of_students: number;
 	created_at: IsoDateTime;
 	updated_at: IsoDateTime;
@@ -120,8 +123,13 @@ export interface DailyRecord {
 	record_date: IsoDate;
 	present: boolean;
 	excused: boolean;
+	/** «متأخر» — a qualifier on attendance; a late student is still present. */
+	late: boolean;
+	/** Why an absence was excused (أذن). */
+	excuse_reason: string | null;
 	exam_from: number | null;
 	exam_to: number | null;
+	/** A page *count*, so it may be fractional («نصف صفحة» = 0.5). */
 	exam_total: number | null;
 	homework: string | null;
 	problems: string | null;
@@ -202,4 +210,127 @@ export interface ScoringSettings {
 	attitude_1_points: number;
 	absent_points: number;
 	excused_points: number;
+	/** Points for «متأخر»; defaults to the present weight. */
+	late_points: number;
+}
+
+/** One record in a bulk upload, keyed by its natural (student, date) pair. */
+export interface BulkUpsertItem {
+	student_id: UUID;
+	record_date: IsoDate;
+	present: boolean;
+	excused: boolean;
+	late: boolean;
+	excuse_reason: string | null;
+	exam_from: number | null;
+	exam_to: number | null;
+	/** A page *count*, so it may be fractional («نصف صفحة» = 0.5). */
+	exam_total: number | null;
+	homework: string | null;
+	problems: string | null;
+	rating: Rating | null;
+	revision_lesson: string | null;
+	revision_rating: Rating | null;
+	attitude: Attitude | null;
+	added_points: number;
+	notes: string | null;
+	problem_ids: UUID[];
+}
+
+export interface BulkUpsertRequest {
+	halaqah_id: UUID;
+	teacher_id: UUID;
+	records: BulkUpsertItem[];
+}
+
+export interface BulkUpsertResponse {
+	items: DailyRecord[];
+	created: number;
+	updated: number;
+}
+
+/** A student's last recitation and the homework they were last assigned. */
+export interface LatestRecitationItem {
+	student_id: UUID;
+	last_recitation: DailyRecord | null;
+	homework: string | null;
+}
+
+export interface LatestRecitationsResponse {
+	items: LatestRecitationItem[];
+}
+
+// --- استدعاء ولي الأمر ------------------------------------------------------
+export type SummonStatus = 'new' | 'reviewing' | 'completed';
+
+export interface ParentSummon {
+	id: UUID;
+	student_id: UUID;
+	student_name: string;
+	father_name: string | null;
+	father_number: string | null;
+	teacher_id: UUID;
+	teacher_name: string;
+	halaqah_id: UUID;
+	halaqah_name: string;
+	reason: string;
+	status: SummonStatus;
+	/** Server-rendered Arabic label — one source of truth for the wording. */
+	status_label: string;
+	/** The administration's reply back to the teacher. */
+	admin_response: string | null;
+	handled_at: IsoDateTime | null;
+	created_at: IsoDateTime;
+	updated_at: IsoDateTime;
+}
+
+export interface ParentSummonList {
+	items: ParentSummon[];
+	total: number;
+	limit: number;
+	offset: number;
+	counts: Record<SummonStatus, number>;
+}
+
+export interface ParentSummonCreate {
+	student_id: UUID;
+	halaqah_id: UUID;
+	reason: string;
+}
+
+// --- الاختبار القادم --------------------------------------------------------
+export type UpcomingExamStatus = 'pending' | 'done' | 'cancelled';
+
+export interface UpcomingExam {
+	id: UUID;
+	student_id: UUID;
+	student_name: string;
+	teacher_id: UUID;
+	teacher_name: string;
+	halaqah_id: UUID;
+	halaqah_name: string;
+	scheduled_date: IsoDate;
+	part: number | null;
+	exam_from: number | null;
+	exam_to: number | null;
+	notes: string | null;
+	status: UpcomingExamStatus;
+	status_label: string;
+	/** Ready-made Arabic coverage description, e.g. «الجزء 5 · من 3 إلى 8». */
+	summary: string;
+}
+
+export interface UpcomingExamCreate {
+	student_id: UUID;
+	halaqah_id: UUID;
+	scheduled_date: IsoDate;
+	part?: number | null;
+	exam_from?: number | null;
+	exam_to?: number | null;
+	notes?: string | null;
+}
+
+export interface NextExamItem {
+	student_id: UUID;
+	exam: UpcomingExam | null;
 }

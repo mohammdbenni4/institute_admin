@@ -12,6 +12,8 @@
 		LayoutDashboard,
 		Layers,
 		Loader2,
+		Building2,
+		PhoneCall,
 		SlidersHorizontal,
 		UserCheck,
 		Users
@@ -37,10 +39,12 @@
 		{ label: 'المعلمون', href: '/admin/teachers', icon: UserCheck },
 		{ label: 'الطلاب', href: '/admin/students', icon: GraduationCap },
 		{ label: 'الحضور والغياب', href: '/admin/attendance', icon: CalendarCheck },
+		{ label: 'استدعاء ولي أمر', href: '/admin/parent-summons', icon: PhoneCall },
 		{ label: 'الحلقات', href: '/admin/halaqahs', icon: BookOpen },
 		{ label: 'أنواع الحلقات', href: '/admin/halaqah-types', icon: Layers },
 		{ label: 'الأوقات', href: '/admin/times', icon: Clock },
 		{ label: 'إعدادات النقاط', href: '/admin/scoring', icon: SlidersHorizontal },
+		{ label: 'بيانات المعهد', href: '/admin/institute', icon: Building2 },
 		{ label: 'الصعوبات', href: '/admin/problems', icon: AlertTriangle }
 	];
 </script>

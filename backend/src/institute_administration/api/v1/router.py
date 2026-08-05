@@ -10,11 +10,14 @@ from institute_administration.modules.daily_records.router import router as dail
 from institute_administration.modules.halaqah_types.router import router as halaqah_types_router
 from institute_administration.modules.halaqahs.router import router as halaqahs_router
 from institute_administration.modules.identity.router import auth_router, users_router
+from institute_administration.modules.institute.router import router as institute_router
+from institute_administration.modules.parent_summons.router import router as parent_summons_router
 from institute_administration.modules.problems.router import router as problems_router
 from institute_administration.modules.scoring.router import router as scoring_router
 from institute_administration.modules.students.router import router as students_router
 from institute_administration.modules.teachers.router import router as teachers_router
 from institute_administration.modules.times.router import router as times_router
+from institute_administration.modules.upcoming_exams.router import router as upcoming_exams_router
 
 api_router = APIRouter()
 
@@ -30,3 +33,6 @@ api_router.include_router(problems_router)
 api_router.include_router(daily_records_router)
 api_router.include_router(analytics_router)
 api_router.include_router(scoring_router)
+api_router.include_router(institute_router)
+api_router.include_router(parent_summons_router)
+api_router.include_router(upcoming_exams_router)

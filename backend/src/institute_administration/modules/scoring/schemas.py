@@ -27,6 +27,7 @@ class ScoringSettingsResponse(BaseModel):
     attitude_1_points: int
     absent_points: int
     excused_points: int
+    late_points: int
 
 
 class ScoringSettingsUpdate(BaseModel):
@@ -46,6 +47,7 @@ class ScoringSettingsUpdate(BaseModel):
     attitude_1_points: int = _Points
     absent_points: int = _Points
     excused_points: int = _Points
+    late_points: int = _Points
 
     def to_settings(self) -> ScoringSettings:
         return ScoringSettings(**self.model_dump())

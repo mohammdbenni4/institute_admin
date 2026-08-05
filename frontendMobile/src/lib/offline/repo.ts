@@ -1,11 +1,16 @@
-// Repository: the single data API the UI uses. Reads are network-first with a cache
-// fallback (so everything works offline); writes update the local mirror immediately,
-// flag the record dirty, and kick a background sync. The UI never calls the network
-// layer (`$lib/api`) directly anymore.
+// Repository: the single data API the UI uses.
+//
+// Reads are *cache-first with background revalidation*: they answer from the local
+// mirror immediately and report fresh server data through `ReadOpts.onFresh`. (They
+// used to be network-first, which meant a stalled connection cost a full timeout per
+// call and the app appeared frozen.) Writes update the mirror, flag the record dirty
+// and kick a background sync. The UI never calls `$lib/api` directly.
 
 import {
 	dailyRecordsApi,
 	halaqahsApi,
+	networkLooksDown,
+	parentSummonsApi,
 	problemsApi,
 	scoringApi,
 	studentsApi,
@@ -15,6 +20,7 @@ import {
 	type Problem,
 	type ProblemBrief,
 	type Rating,
+	type ParentSummon,
 	type ScoringSettings,
 	type Student
 } from '$lib/api';
@@ -25,112 +31,184 @@ import { refreshPending } from './state.svelte';
 import { isNetworkError, syncNow } from './sync';
 
 const SCORING_KEY = 'scoring.settings';
+// Last-seen summons list, so the panel still renders something offline.
+const SUMMONS_KEY = 'summons.list';
+
+// ------------------------------------------------------- read-through core -------
+
+/**
+ * Options every read accepts.
+ *
+ * `onFresh` is what makes the app usable on a weak connection: the call returns the
+ * cached copy *immediately* and, if the network later answers, hands the fresh data
+ * back through this callback so the page updates in place. Nothing ever blocks on a
+ * request that is going to time out.
+ */
+export interface ReadOpts<T> {
+	/** Called with server data when a background refresh succeeds (never on cache hits). */
+	onFresh?: (value: T) => void;
+	/** Wait for the server instead of answering from cache (the manual «تحديث» button). */
+	force?: boolean;
+}
+
+/** Should we even try the network right now? */
+function canReachNetwork(): boolean {
+	return net.online && !networkLooksDown();
+}
+
+/**
+ * Cache-first read with background revalidation.
+ *
+ * - cache hit  → return it now, refresh in the background, report via `onFresh`
+ * - cache miss → await the network (there is nothing to show otherwise)
+ * - offline    → cache only
+ *
+ * Reads used to be network-*first*, so on a stalled connection every call paid the
+ * full timeout before falling back and the whole screen sat on a spinner.
+ */
+async function readThrough<T>(
+	load: () => Promise<T>,
+	fetchRemote: () => Promise<T>,
+	store: (value: T) => Promise<void>,
+	isUsable: (value: T) => boolean,
+	opts: ReadOpts<T> = {}
+): Promise<T> {
+	const cached = await load();
+	const wantNetwork = opts.force || !isUsable(cached);
+
+	if (!canReachNetwork()) {
+		if (opts.force && !net.online) return cached;
+		return cached;
+	}
+
+	if (wantNetwork) {
+		try {
+			const fresh = await fetchRemote();
+			await store(fresh);
+			return await load();
+		} catch (e) {
+			if (!isNetworkError(e)) throw e;
+			return cached; // network died — the cache is the best we have
+		}
+	}
+
+	// Usable cache: answer now, catch up in the background.
+	void (async () => {
+		try {
+			const fresh = await fetchRemote();
+			await store(fresh);
+			opts.onFresh?.(await load());
+		} catch {
+			/* background refresh is best-effort */
+		}
+	})();
+	return cached;
+}
 
 // ---------------------------------------------------------------- reads ----------
 
-export async function listHalaqahs(teacherId: string): Promise<Halaqah[]> {
-	if (net.online) {
-		try {
-			const res = await halaqahsApi.list({ teacher_id: teacherId, limit: 200 });
-			await db.halaqahs.bulkPut(res.items);
-			return res.items;
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	return db.halaqahs.where('teacher_id').equals(teacherId).toArray();
+export async function listHalaqahs(
+	teacherId: string,
+	opts: ReadOpts<Halaqah[]> = {}
+): Promise<Halaqah[]> {
+	return readThrough(
+		() => db.halaqahs.where('teacher_id').equals(teacherId).toArray(),
+		async () => (await halaqahsApi.list({ teacher_id: teacherId, limit: 200 })).items,
+		(items) => db.halaqahs.bulkPut(items).then(() => undefined),
+		(items) => items.length > 0,
+		opts
+	);
 }
 
-export async function getHalaqah(id: string): Promise<Halaqah> {
-	if (net.online) {
-		try {
-			const h = await halaqahsApi.get(id);
-			await db.halaqahs.put(h);
-			return h;
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	const cached = await db.halaqahs.get(id);
-	if (!cached) throw new Error('هذه الحلقة غير متوفرة دون اتصال');
-	return cached;
+export async function getHalaqah(id: string, opts: ReadOpts<Halaqah> = {}): Promise<Halaqah> {
+	const result = await readThrough(
+		() => db.halaqahs.get(id),
+		() => halaqahsApi.get(id),
+		async (h) => {
+			if (h) await db.halaqahs.put(h);
+		},
+		(h) => h != null,
+		opts as ReadOpts<Halaqah | undefined>
+	);
+	if (!result) throw new Error('هذه الحلقة غير متوفرة دون اتصال');
+	return result;
 }
 
-export async function listStudents(halaqahId: string): Promise<Student[]> {
-	if (net.online) {
-		try {
-			const res = await studentsApi.list({ halaqah_id: halaqahId, limit: 200 });
-			await db.students.bulkPut(res.items);
-			return res.items;
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	return db.students.where('halaqah_id').equals(halaqahId).toArray();
+export async function listStudents(
+	halaqahId: string,
+	opts: ReadOpts<Student[]> = {}
+): Promise<Student[]> {
+	return readThrough(
+		() => db.students.where('halaqah_id').equals(halaqahId).toArray(),
+		async () => (await studentsApi.list({ halaqah_id: halaqahId, limit: 200 })).items,
+		async (items) => {
+			// Students removed from the halaqah server-side must disappear locally too,
+			// otherwise the roster only ever grows.
+			const keep = new Set(items.map((s) => s.id));
+			const stale = (await db.students.where('halaqah_id').equals(halaqahId).toArray())
+				.filter((s) => !keep.has(s.id))
+				.map((s) => s.id);
+			if (stale.length) await db.students.bulkDelete(stale);
+			await db.students.bulkPut(items);
+		},
+		(items) => items.length > 0,
+		opts
+	);
 }
 
-export async function getStudent(id: string): Promise<Student> {
-	if (net.online) {
-		try {
-			const s = await studentsApi.get(id);
-			await db.students.put(s);
-			return s;
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	const cached = await db.students.get(id);
-	if (!cached) throw new Error('بيانات الطالب غير متوفرة دون اتصال');
-	return cached;
+export async function getStudent(id: string, opts: ReadOpts<Student> = {}): Promise<Student> {
+	const result = await readThrough(
+		() => db.students.get(id),
+		() => studentsApi.get(id),
+		async (s) => {
+			if (s) await db.students.put(s);
+		},
+		(s) => s != null,
+		opts as ReadOpts<Student | undefined>
+	);
+	if (!result) throw new Error('بيانات الطالب غير متوفرة دون اتصال');
+	return result;
 }
 
 async function cachedScoring(): Promise<ScoringSettings | null> {
 	return (await metaGet<ScoringSettings>(SCORING_KEY)) ?? null;
 }
 
-export async function getScoring(): Promise<ScoringSettings | null> {
-	if (net.online) {
-		try {
-			const s = await scoringApi.get();
-			await metaSet(SCORING_KEY, s);
-			return s;
-		} catch {
-			/* fall through to cache */
-		}
-	}
-	return cachedScoring();
+export async function getScoring(opts: ReadOpts<ScoringSettings | null> = {}) {
+	return readThrough(
+		cachedScoring,
+		() => scoringApi.get(),
+		(s) => (s ? metaSet(SCORING_KEY, s) : Promise.resolve()),
+		(s) => s != null,
+		opts
+	);
 }
 
-export async function listProblems(): Promise<Problem[]> {
-	if (net.online) {
-		try {
-			const res = await problemsApi.list({ limit: 500 });
+export async function listProblems(opts: ReadOpts<Problem[]> = {}): Promise<Problem[]> {
+	return readThrough(
+		() => db.problems.toArray(),
+		async () => (await problemsApi.list({ limit: 500 })).items,
+		async (items) => {
 			await db.problems.clear();
-			await db.problems.bulkPut(res.items);
-			return res.items;
-		} catch {
-			/* fall through to cache */
-		}
-	}
-	return db.problems.toArray();
+			await db.problems.bulkPut(items);
+		},
+		(items) => items.length > 0,
+		opts
+	);
 }
 
-async function fetchAllRecords(
-	halaqahId: string,
-	from: string,
-	to: string
-): Promise<DailyRecord[]> {
+/** Page through the list endpoint (the API caps `limit` at 200). */
+async function fetchAllRecords(query: {
+	halaqah_id?: string;
+	student_id?: string;
+	date_from: string;
+	date_to: string;
+}): Promise<DailyRecord[]> {
 	const PAGE = 200;
 	let items: DailyRecord[] = [];
 	let offset = 0;
 	for (;;) {
-		const res = await dailyRecordsApi.list({
-			halaqah_id: halaqahId,
-			date_from: from,
-			date_to: to,
-			limit: PAGE,
-			offset
-		});
+		const res = await dailyRecordsApi.list({ ...query, limit: PAGE, offset });
 		items = items.concat(res.items);
 		offset += PAGE;
 		if (items.length >= res.total || res.items.length === 0) break;
@@ -138,93 +216,174 @@ async function fetchAllRecords(
 	return items;
 }
 
-/** Upsert server records into the cache, but never clobber un-pushed local edits. */
+/** Upsert server records into the cache, but never clobber un-pushed local edits.
+ *  One bulk read + one bulk write instead of two round-trips per record — this used
+ *  to be the slowest part of opening a halaqah with a full month of history. */
 async function mergeServerRecords(items: DailyRecord[]): Promise<void> {
+	if (items.length === 0) return;
+	const keys = items.map((r) => [r.student_id, r.record_date] as [string, string]);
+	const existing = await db.records.where('[student_id+record_date]').anyOf(keys).toArray();
+	const byKey = new Map(existing.map((r) => [`${r.student_id}|${r.record_date}`, r]));
+
+	const toPut: CachedRecord[] = [];
+	const toDelete: string[] = [];
 	for (const srv of items) {
-		const existing = await db.records
-			.where('[student_id+record_date]')
-			.equals([srv.student_id, srv.record_date])
-			.first();
-		if (existing?.dirty) continue;
-		if (existing && existing.id !== srv.id) await db.records.delete(existing.id);
-		await db.records.put({ ...srv, dirty: 0, localOnly: 0 });
+		const prev = byKey.get(`${srv.student_id}|${srv.record_date}`);
+		if (prev?.dirty) continue; // local edit wins until it is pushed
+		if (prev && prev.id !== srv.id) toDelete.push(prev.id);
+		toPut.push({ ...srv, dirty: 0, localOnly: 0 });
 	}
+	if (toDelete.length) await db.records.bulkDelete(toDelete);
+	if (toPut.length) await db.records.bulkPut(toPut);
+}
+
+/** Marker proving a date window was fetched at least once, so an empty month is
+ *  served from cache instead of re-hitting the network on every visit. */
+function rangeKey(scope: string, id: string, from: string, to: string): string {
+	return `range.${scope}.${id}.${from}..${to}`;
 }
 
 export async function listMonthRecords(
 	halaqahId: string,
 	from: string,
-	to: string
+	to: string,
+	opts: ReadOpts<DailyRecord[]> = {}
 ): Promise<DailyRecord[]> {
-	if (net.online) {
-		try {
-			await mergeServerRecords(await fetchAllRecords(halaqahId, from, to));
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	return db.records
-		.where('halaqah_id')
-		.equals(halaqahId)
-		.and((r) => r.record_date >= from && r.record_date <= to)
-		.toArray();
+	const key = rangeKey('halaqah', halaqahId, from, to);
+	let fetched = (await metaGet<number>(key)) != null;
+	return readThrough(
+		() =>
+			db.records
+				.where('halaqah_id')
+				.equals(halaqahId)
+				.and((r) => r.record_date >= from && r.record_date <= to)
+				.toArray(),
+		() => fetchAllRecords({ halaqah_id: halaqahId, date_from: from, date_to: to }),
+		async (items) => {
+			await mergeServerRecords(items);
+			await metaSet(key, Date.now());
+			fetched = true;
+		},
+		() => fetched,
+		opts
+	);
 }
 
-/** All of one student's records in a date window (network-first, cache fallback).
- * Used to surface a student's most recent recitation/homework even when it falls
- * in an earlier month than the one being viewed. */
+/** All of one student's records in a date window. Used to surface a student's most
+ *  recent recitation/homework even when it falls in an earlier month. */
 export async function listStudentRecords(
 	studentId: string,
 	from: string,
-	to: string
+	to: string,
+	opts: ReadOpts<DailyRecord[]> = {}
 ): Promise<DailyRecord[]> {
-	if (net.online) {
-		try {
-			const PAGE = 200;
-			let items: DailyRecord[] = [];
-			let offset = 0;
-			for (;;) {
-				const res = await dailyRecordsApi.list({
-					student_id: studentId,
-					date_from: from,
-					date_to: to,
-					limit: PAGE,
-					offset
-				});
-				items = items.concat(res.items);
-				offset += PAGE;
-				if (items.length >= res.total || res.items.length === 0) break;
-			}
+	const key = rangeKey('student', studentId, from, to);
+	let fetched = (await metaGet<number>(key)) != null;
+	return readThrough(
+		() =>
+			db.records
+				.where('student_id')
+				.equals(studentId)
+				.and((r) => r.record_date >= from && r.record_date <= to)
+				.toArray(),
+		() => fetchAllRecords({ student_id: studentId, date_from: from, date_to: to }),
+		async (items) => {
 			await mergeServerRecords(items);
-		} catch (e) {
-			if (!isNetworkError(e)) throw e;
-		}
-	}
-	return db.records
-		.where('student_id')
-		.equals(studentId)
-		.and((r) => r.record_date >= from && r.record_date <= to)
-		.toArray();
+			await metaSet(key, Date.now());
+			fetched = true;
+		},
+		() => fetched,
+		opts
+	);
 }
 
-export async function getDayRecord(studentId: string, date: string): Promise<DailyRecord | null> {
-	if (net.online) {
+/** A student's most recent recitation and the homework they were last assigned. */
+export interface LatestRecitation {
+	record: DailyRecord | null;
+	homework: string | null;
+}
+
+/** Does this record represent a recitation (exam range/total, rating, or revision)? */
+function hasRecitation(r: DailyRecord): boolean {
+	return (
+		r.rating != null ||
+		r.exam_from != null ||
+		r.exam_to != null ||
+		r.exam_total != null ||
+		!!r.revision_lesson
+	);
+}
+
+/** Compute «آخر تسميع» + «آخر واجب» from whatever is in the local mirror. */
+async function latestFromCache(
+	studentIds: string[],
+	before?: string
+): Promise<Map<string, LatestRecitation>> {
+	const out = new Map<string, LatestRecitation>();
+	for (const id of studentIds) {
+		const rows = (await db.records.where('student_id').equals(id).toArray())
+			.filter((r) => (before ? r.record_date < before : true))
+			.sort((a, b) => b.record_date.localeCompare(a.record_date));
+		out.set(id, {
+			record: rows.find(hasRecitation) ?? null,
+			homework: rows.find((r) => r.homework && r.homework.trim() !== '')?.homework ?? null
+		});
+	}
+	return out;
+}
+
+/**
+ * Per-student last recitation + last homework, with **no date window**.
+ *
+ * The screens used to derive this from a fixed three-month fetch, so a student who
+ * had been absent longer than that showed «لم يُسجّل تسميع بعد» even though they had
+ * a history. The server answers straight from the whole table; offline we fall back
+ * to the local mirror.
+ */
+export async function latestRecitations(
+	studentIds: string[],
+	before?: string
+): Promise<Map<string, LatestRecitation>> {
+	if (studentIds.length === 0) return new Map();
+	if (canReachNetwork()) {
 		try {
-			const res = await dailyRecordsApi.list({
-				student_id: studentId,
-				record_date: date,
-				limit: 1
-			});
-			if (res.items[0]) await mergeServerRecords([res.items[0]]);
+			const res = await dailyRecordsApi.latestRecitations(studentIds, before);
+			// Fold the server's answer into the cache so the offline path matches.
+			await mergeServerRecords(
+				res.items.map((i) => i.last_recitation).filter((r): r is DailyRecord => r != null)
+			);
+			return new Map(
+				res.items.map((i) => [i.student_id, { record: i.last_recitation, homework: i.homework }])
+			);
 		} catch (e) {
 			if (!isNetworkError(e)) throw e;
 		}
 	}
-	const cached = await db.records
-		.where('[student_id+record_date]')
-		.equals([studentId, date])
-		.first();
-	return cached ?? null;
+	return latestFromCache(studentIds, before);
+}
+
+export async function getDayRecord(
+	studentId: string,
+	date: string,
+	opts: ReadOpts<DailyRecord | null> = {}
+): Promise<DailyRecord | null> {
+	const key = rangeKey('day', studentId, date, date);
+	let fetched = (await metaGet<number>(key)) != null;
+	return readThrough(
+		async () =>
+			(await db.records.where('[student_id+record_date]').equals([studentId, date]).first()) ??
+			null,
+		async () =>
+			(await dailyRecordsApi.list({ student_id: studentId, record_date: date, limit: 1 }))
+				.items[0] ?? null,
+		async (rec) => {
+			if (rec) await mergeServerRecords([rec]);
+			await metaSet(key, Date.now());
+			fetched = true;
+		},
+		() => fetched,
+		opts
+	);
 }
 
 // --------------------------------------------------------------- writes ----------
@@ -236,6 +395,8 @@ export interface UpsertInput {
 	record_date: string;
 	present?: boolean;
 	excused?: boolean;
+	late?: boolean;
+	excuse_reason?: string | null;
 	exam_from?: number | null;
 	exam_to?: number | null;
 	exam_total?: number | null;
@@ -264,6 +425,7 @@ function applyOptimisticScores(rec: CachedRecord, scoring: ScoringSettings | nul
 		{
 			present: rec.present,
 			excused: rec.excused,
+			late: rec.late,
 			rating: rec.rating,
 			revision_rating: rec.revision_rating,
 			attitude: rec.attitude,
@@ -301,6 +463,8 @@ function blankRecord(input: UpsertInput, now: string): CachedRecord {
 		record_date: input.record_date,
 		present: true,
 		excused: false,
+		late: false,
+		excuse_reason: null,
 		exam_from: null,
 		exam_to: null,
 		exam_total: null,
@@ -330,6 +494,8 @@ function snapshotBaseline(r: DailyRecord): RecordBaseline {
 	return {
 		present: r.present,
 		excused: r.excused,
+		late: r.late,
+		excuse_reason: r.excuse_reason,
 		exam_from: r.exam_from,
 		exam_to: r.exam_to,
 		exam_total: r.exam_total,
@@ -346,7 +512,8 @@ function snapshotBaseline(r: DailyRecord): RecordBaseline {
 
 async function buildCachedRecord(
 	existing: CachedRecord | undefined,
-	input: UpsertInput
+	input: UpsertInput,
+	scoring?: ScoringSettings | null
 ): Promise<CachedRecord> {
 	const now = new Date().toISOString();
 	const base = existing ?? blankRecord(input, now);
@@ -363,6 +530,8 @@ async function buildCachedRecord(
 		...base,
 		present: pick(input.present, base.present),
 		excused: pick(input.excused, base.excused),
+		late: pick(input.late, base.late),
+		excuse_reason: pick(input.excuse_reason, base.excuse_reason),
 		exam_from: pick(input.exam_from, base.exam_from),
 		exam_to: pick(input.exam_to, base.exam_to),
 		exam_total: pick(input.exam_total, base.exam_total),
@@ -377,7 +546,9 @@ async function buildCachedRecord(
 		updated_at: now,
 		dirty: 1,
 		localOnly: existing ? existing.localOnly : 1,
-		baseline
+		baseline,
+		// The teacher just changed something, so give the server another chance.
+		syncError: null
 	};
 
 	if (input.problem_ids !== undefined) {
@@ -387,7 +558,7 @@ async function buildCachedRecord(
 		rec.problem_ids = base.problem_ids ?? base.tagged_problems.map((p) => p.id);
 	}
 
-	applyOptimisticScores(rec, await cachedScoring());
+	applyOptimisticScores(rec, scoring !== undefined ? scoring : await cachedScoring());
 	return rec;
 }
 
@@ -429,26 +600,44 @@ export interface AttendanceInput {
 	halaqah_id: string;
 	teacher_id: string;
 	record_date: string;
-	entries: { student_id: string; present: boolean; excused: boolean }[];
+	entries: {
+		student_id: string;
+		present: boolean;
+		excused: boolean;
+		late: boolean;
+		excuse_reason: string | null;
+	}[];
 }
 
-/** Mark attendance for a whole halaqah (keeps each record's assessment fields). */
+/** Mark attendance for a whole halaqah (keeps each record's assessment fields).
+ *  Reads and writes the whole class in two bulk operations rather than a pair of
+ *  IndexedDB round-trips per student — noticeably faster on a large halaqah. */
 export async function setAttendance(input: AttendanceInput): Promise<void> {
+	const keys = input.entries.map((e) => [e.student_id, input.record_date] as [string, string]);
+	const existing = await db.records.where('[student_id+record_date]').anyOf(keys).toArray();
+	const byStudent = new Map(existing.map((r) => [r.student_id, r]));
+
+	const scoring = await cachedScoring();
+	const rows: CachedRecord[] = [];
 	for (const e of input.entries) {
-		const existing = await db.records
-			.where('[student_id+record_date]')
-			.equals([e.student_id, input.record_date])
-			.first();
-		const rec = await buildCachedRecord(existing, {
-			student_id: e.student_id,
-			teacher_id: input.teacher_id,
-			halaqah_id: input.halaqah_id,
-			record_date: input.record_date,
-			present: e.present,
-			excused: e.excused
-		});
-		await commitRecord(rec);
+		rows.push(
+			await buildCachedRecord(
+				byStudent.get(e.student_id),
+				{
+					student_id: e.student_id,
+					teacher_id: input.teacher_id,
+					halaqah_id: input.halaqah_id,
+					record_date: input.record_date,
+					present: e.present,
+					excused: e.excused,
+					late: e.late,
+					excuse_reason: e.excuse_reason
+				},
+				scoring
+			)
+		);
 	}
+	await db.records.bulkPut(rows.map(toPlain));
 	await refreshPending();
 	void syncNow();
 }
@@ -491,4 +680,87 @@ async function restoreFromBaseline(rec: CachedRecord): Promise<void> {
 	rec.dirty = 0;
 	rec.baseline = null;
 	await db.records.put(toPlain(rec));
+}
+
+// ------------------------------------------------- استدعاء ولي الأمر -------------
+
+/** A summons the teacher raised, whether it has reached the server yet or not.
+ *  Queued requests are shown with a «قيد الإرسال» status so the teacher can see
+ *  their request exists even before it uploads. */
+export interface SummonEntry {
+	id: string;
+	studentName: string;
+	halaqahName: string;
+	reason: string;
+	statusLabel: string;
+	status: 'queued' | ParentSummon['status'];
+	adminResponse: string | null;
+	createdAt: string;
+	/** true = still in the outbox, not yet accepted by the server. */
+	queued: boolean;
+}
+
+/**
+ * Raise a «استدعاء ولي الأمر».
+ *
+ * Written to the outbox first and uploaded by the sync engine, so a teacher in a
+ * classroom with no signal can still file one. Returns immediately.
+ */
+export async function requestParentSummon(input: {
+	student_id: string;
+	student_name: string;
+	halaqah_id: string;
+	reason: string;
+}): Promise<void> {
+	await db.pendingSummons.put({
+		id: `local:${uid()}`,
+		student_id: input.student_id,
+		student_name: input.student_name,
+		halaqah_id: input.halaqah_id,
+		reason: input.reason.trim(),
+		created_at: new Date().toISOString()
+	});
+	await refreshPending();
+	void syncNow();
+}
+
+/** The teacher's own requests: everything queued locally, then the server's list. */
+export async function listSummons(): Promise<SummonEntry[]> {
+	const queued = await db.pendingSummons.orderBy('created_at').reverse().toArray();
+	const local: SummonEntry[] = queued.map((q) => ({
+		id: q.id,
+		studentName: q.student_name,
+		halaqahName: '',
+		reason: q.reason,
+		status: 'queued',
+		statusLabel: 'قيد الإرسال',
+		adminResponse: null,
+		createdAt: q.created_at,
+		queued: true
+	}));
+
+	let remote: SummonEntry[] = [];
+	if (canReachNetwork()) {
+		try {
+			const res = await parentSummonsApi.list({ limit: 100 });
+			remote = res.items.map((s) => ({
+				id: s.id,
+				studentName: s.student_name,
+				halaqahName: s.halaqah_name,
+				reason: s.reason,
+				status: s.status,
+				statusLabel: s.status_label,
+				adminResponse: s.admin_response,
+				createdAt: s.created_at,
+				queued: false
+			}));
+			await metaSet(SUMMONS_KEY, remote);
+		} catch (e) {
+			if (!isNetworkError(e)) throw e;
+			remote = (await metaGet<SummonEntry[]>(SUMMONS_KEY)) ?? [];
+		}
+	} else {
+		remote = (await metaGet<SummonEntry[]>(SUMMONS_KEY)) ?? [];
+	}
+	return [...local, ...remote];
 }

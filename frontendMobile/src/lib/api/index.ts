@@ -1,4 +1,5 @@
-export { api, ApiError, qs, tokens } from './client';
+export { api, ApiError, errorMessage, networkLooksDown, qs, tokens } from './client';
+export type { FieldError } from './client';
 export { auth, login, loadCurrentUser, logout } from './auth.svelte';
 export {
 	teachersApi,
@@ -6,6 +7,8 @@ export {
 	studentsApi,
 	dailyRecordsApi,
 	scoringApi,
-	problemsApi
+	problemsApi,
+	parentSummonsApi,
+	upcomingExamsApi
 } from './resources';
 export type * from './types';

@@ -31,3 +31,8 @@ class ScoringSettingsModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attitude_1_points: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     absent_points: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     excused_points: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    # «متأخر» — defaults to the present weight so lateness costs nothing until the
+    # institute decides otherwise.
+    late_points: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=5, server_default="5"
+    )

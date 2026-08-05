@@ -12,6 +12,8 @@ export type RecordBaseline = Pick<
 	DailyRecord,
 	| 'present'
 	| 'excused'
+	| 'late'
+	| 'excuse_reason'
 	| 'exam_from'
 	| 'exam_to'
 	| 'exam_total'
@@ -35,11 +37,36 @@ export interface CachedRecord extends DailyRecord {
 	problem_ids?: string[];
 	/** Server values before the current un-pushed edits (null for locally-created records). */
 	baseline?: RecordBaseline | null;
+	/**
+	 * Why the server refused this record, in Arabic.
+	 *
+	 * A rejected record is *not* retried until the teacher edits it — replaying a
+	 * payload the server has already judged invalid just fails identically every
+	 * 60 seconds and leaves the outbox permanently stuck. Editing (or an explicit
+	 * retry) clears this and puts it back in the queue.
+	 */
+	syncError?: string | null;
 }
 
 export interface MetaRow {
 	key: string;
 	value: unknown;
+}
+
+/** A «استدعاء ولي الأمر» raised on the device, waiting to reach the server.
+ *
+ *  Requests get their own outbox rather than riding on the daily-record one: they
+ *  are created, never edited, so "send once and forget" is the whole lifecycle. */
+export interface PendingSummon {
+	/** Client-generated id; the server assigns its own on acceptance. */
+	id: string;
+	student_id: string;
+	student_name: string;
+	halaqah_id: string;
+	reason: string;
+	created_at: string;
+	/** Set when the server rejected it outright, so the teacher can see why. */
+	error?: string | null;
 }
 
 class TeacherDB extends Dexie {
@@ -48,6 +75,7 @@ class TeacherDB extends Dexie {
 	records!: Table<CachedRecord, string>;
 	problems!: Table<Problem, string>;
 	meta!: Table<MetaRow, string>;
+	pendingSummons!: Table<PendingSummon, string>;
 
 	constructor() {
 		super('teacher-offline');
@@ -59,6 +87,16 @@ class TeacherDB extends Dexie {
 			records: 'id, &[student_id+record_date], student_id, halaqah_id, record_date, dirty',
 			problems: 'id',
 			meta: 'key'
+		});
+		// v2 adds the summons outbox. Dexie migrates existing installs in place; the
+		// tables above are repeated because a version's schema is the full picture.
+		this.version(2).stores({
+			halaqahs: 'id, teacher_id',
+			students: 'id, halaqah_id',
+			records: 'id, &[student_id+record_date], student_id, halaqah_id, record_date, dirty',
+			problems: 'id',
+			meta: 'key',
+			pendingSummons: 'id, created_at'
 		});
 	}
 }
@@ -80,6 +118,20 @@ export async function dirtyCount(): Promise<number> {
 	return db.records.where('dirty').equals(1).count();
 }
 
+/** Records the server refused — they need the teacher to correct something. */
+export async function rejectedCount(): Promise<number> {
+	return db.records
+		.where('dirty')
+		.equals(1)
+		.filter((r) => !!r.syncError)
+		.count();
+}
+
+/** Count of «استدعاء ولي الأمر» requests still waiting to upload. */
+export async function pendingSummonCount(): Promise<number> {
+	return db.pendingSummons.count();
+}
+
 /** Wipe everything (on logout — the cache holds student PII). */
 export async function clearOfflineData(): Promise<void> {
 	await Promise.all([
@@ -87,6 +139,7 @@ export async function clearOfflineData(): Promise<void> {
 		db.students.clear(),
 		db.records.clear(),
 		db.problems.clear(),
-		db.meta.clear()
+		db.meta.clear(),
+		db.pendingSummons.clear()
 	]);
 }

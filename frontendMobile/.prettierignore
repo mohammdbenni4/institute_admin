@@ -4,3 +4,7 @@ node_modules/
 android/
 ios/
 package-lock.json
+
+# Generated font CSS (vendored from Google Fonts by `npm run fonts`)
+src/lib/fonts.css
+static/fonts/

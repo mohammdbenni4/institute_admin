@@ -1,3 +1,5 @@
+@import './lib/fonts.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -43,6 +45,16 @@
 			'wght' 300,
 			'GRAD' 0,
 			'opsz' 24;
+		/* An icon is a ligature: without its font the browser paints the *name*
+		   ("progress_activity", "cloud_done", …) as ordinary text, which is what made
+		   words appear — and spin — all over the UI. Icons stay invisible until the
+		   bundled font is confirmed loaded (`fonts-ready`, set in +layout.svelte).
+		   Local fonts resolve in milliseconds, so this is imperceptible. */
+		visibility: hidden;
+	}
+
+	html.fonts-ready .material-symbols-outlined {
+		visibility: visible;
 	}
 
 	.material-symbols-outlined.filled {

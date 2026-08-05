@@ -262,6 +262,10 @@ export interface DailyRecord {
 	record_date: IsoDate;
 	present: boolean;
 	excused: boolean;
+	/** «متأخر» — a qualifier on attendance; a late student is still present. */
+	late: boolean;
+	/** Why an absence was excused (أذن). */
+	excuse_reason: string | null;
 	exam_from: number | null;
 	exam_to: number | null;
 	exam_total: number | null;
@@ -322,6 +326,56 @@ export interface DailyRecordUpdate {
 }
 
 // --- Analytics -------------------------------------------------------------
+/** Filters accepted by the aggregated attendance-matrix endpoint. */
+export interface AttendanceMatrixParams {
+	date_from?: string;
+	date_to?: string;
+	halaqah_id?: UUID;
+	teacher_id?: UUID;
+	search?: string;
+	status?: 'present' | 'late' | 'absent' | 'excused';
+	on_day?: string;
+	sort?: 'halaqah' | 'name' | 'rate-asc' | 'rate-desc';
+	limit?: number;
+	offset?: number;
+}
+
+export interface AttendanceMatrixStudent {
+	student_id: UUID;
+	student_name: string;
+	father_number: string | null;
+	halaqah_id: UUID | null;
+	halaqah_name: string | null;
+	teacher_id: UUID | null;
+	teacher_name: string | null;
+	/** Every attended day, late ones included. */
+	present: number;
+	/** Subset of `present`. */
+	late: number;
+	absent: number;
+	excused: number;
+	total: number;
+	rate: number;
+	/** One char per day of the window: P present, A absent, E excused, '.' no record. */
+	days: string;
+}
+
+export interface AttendanceMatrix {
+	date_from: string;
+	date_to: string;
+	days: number;
+	items: AttendanceMatrixStudent[];
+	total: number;
+	limit: number;
+	offset: number;
+	students: number;
+	total_present: number;
+	total_late: number;
+	total_absent: number;
+	total_excused: number;
+	average_rate: number;
+}
+
 export interface AnalyticsOverview {
 	records: number;
 	present: number;
@@ -386,4 +440,72 @@ export interface ScoringSettings {
 	attitude_1_points: number;
 	absent_points: number;
 	excused_points: number;
+	/** Points for «متأخر»; defaults to the present weight. */
+	late_points: number;
+}
+
+/** The institute's own identity, printed on the monthly student report. */
+export interface InstituteSettings {
+	name: string;
+	subtitle: string;
+	phone: string;
+	/** Data URI or absolute URL. Kept inline so the printed report is self-contained. */
+	logo_url: string | null;
+	report_footer: string;
+	report_note: string;
+}
+
+// --- استدعاء ولي الأمر ------------------------------------------------------
+export type SummonStatus = 'new' | 'reviewing' | 'completed';
+
+export interface ParentSummon {
+	id: UUID;
+	student_id: UUID;
+	student_name: string;
+	father_name: string | null;
+	father_number: string | null;
+	teacher_id: UUID;
+	teacher_name: string;
+	halaqah_id: UUID;
+	halaqah_name: string;
+	reason: string;
+	status: SummonStatus;
+	/** Server-rendered Arabic label — one source of truth for the wording. */
+	status_label: string;
+	admin_response: string | null;
+	handled_at: IsoDateTime | null;
+	created_at: IsoDateTime;
+	updated_at: IsoDateTime;
+}
+
+export interface ParentSummonList {
+	items: ParentSummon[];
+	total: number;
+	limit: number;
+	offset: number;
+	counts: Record<SummonStatus, number>;
+}
+
+export interface ParentSummonUpdate {
+	status?: SummonStatus;
+	admin_response?: string | null;
+}
+
+// --- الاختبار القادم --------------------------------------------------------
+export interface UpcomingExam {
+	id: UUID;
+	student_id: UUID;
+	student_name: string;
+	teacher_id: UUID;
+	teacher_name: string;
+	halaqah_id: UUID;
+	halaqah_name: string;
+	scheduled_date: IsoDate;
+	part: number | null;
+	exam_from: number | null;
+	exam_to: number | null;
+	notes: string | null;
+	status: 'pending' | 'done' | 'cancelled';
+	status_label: string;
+	summary: string;
 }

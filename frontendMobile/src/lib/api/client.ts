@@ -35,8 +35,29 @@ export const tokens = {
 	}
 };
 
-/** Error carrying the HTTP status and the backend's Arabic `detail` message. */
+/** One field the server rejected, ready to be shown next to its input. */
+export interface FieldError {
+	field: string;
+	/** Arabic name of the field, e.g. «العدد الكلي». */
+	label: string;
+	/** Position within a batch upload, or null for a single-object request. */
+	index: number | null;
+	/** Stable machine-readable reason, e.g. `int_from_float`. */
+	code: string;
+	/** Arabic explanation. */
+	message: string;
+}
+
+/**
+ * Error carrying the HTTP status and the backend's Arabic `detail` message.
+ *
+ * `code` and `errors` are the machine-readable half: match on `code` rather than
+ * on the Arabic prose, which is free to be reworded.
+ */
 export class ApiError extends Error {
+	readonly code: string;
+	readonly errors: FieldError[];
+
 	constructor(
 		readonly status: number,
 		message: string,
@@ -44,6 +65,14 @@ export class ApiError extends Error {
 	) {
 		super(message);
 		this.name = 'ApiError';
+		const payload = (body ?? {}) as { code?: string; errors?: FieldError[] };
+		this.code = payload.code ?? 'error';
+		this.errors = Array.isArray(payload.errors) ? payload.errors : [];
+	}
+
+	/** The reason a particular input was rejected, if the server named it. */
+	fieldError(field: string): FieldError | undefined {
+		return this.errors.find((e) => e.field === field);
 	}
 }
 
@@ -53,14 +82,43 @@ const AUTH_PATHS = ['/auth/login', '/auth/refresh'];
 
 /** Network request timeout (ms). Without this a stalled request hangs the page on a
  * perpetual spinner; on timeout the fetch aborts and the offline cache takes over. */
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 8000;
+
+/** How long to stop attempting the network after a request times out. */
+const COOLDOWN_MS = 20000;
+
+// ---- Reachability circuit breaker ------------------------------------------------
+// The OS can report "connected" on a network that cannot actually reach the server
+// (weak signal, captive portal, server down). Without this, every read on a page
+// paid the full timeout in turn and the app looked frozen for a minute. After one
+// timeout we treat the network as down for a short window and serve the cache
+// immediately; the next successful request clears it.
+let coolDownUntil = 0;
+
+/** True when a recent request timed out — callers should prefer the offline cache. */
+export function networkLooksDown(): boolean {
+	return Date.now() < coolDownUntil;
+}
+
+function noteFailure(): void {
+	coolDownUntil = Date.now() + COOLDOWN_MS;
+}
+
+function noteSuccess(): void {
+	coolDownUntil = 0;
+}
 
 /** `fetch` with an abort-based timeout. AbortError is treated as a network error upstream. */
 async function fetchWithTimeout(url: string, init: Parameters<typeof fetch>[1]): Promise<Response> {
 	const ctrl = new AbortController();
 	const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 	try {
-		return await fetch(url, { ...init, signal: ctrl.signal });
+		const res = await fetch(url, { ...init, signal: ctrl.signal });
+		noteSuccess();
+		return res;
+	} catch (e) {
+		noteFailure();
+		throw e;
 	} finally {
 		clearTimeout(timer);
 	}
@@ -133,3 +191,29 @@ export const api = {
 	patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
 	delete: (path: string) => request<void>('DELETE', path)
 };
+
+/**
+ * One Arabic sentence for any failure, for direct display to a teacher.
+ *
+ * The API already answers in Arabic (see the backend's error handlers), but a
+ * request that never reaches it fails with the browser's own English text —
+ * "NetworkError when attempting to fetch resource", "The operation was aborted" —
+ * which used to reach the screen verbatim. Everything funnels through here.
+ */
+export function errorMessage(e: unknown, fallback = 'حدث خطأ غير متوقع'): string {
+	if (e instanceof ApiError) {
+		if (e.status === 429) return e.message || 'محاولات كثيرة جداً، يرجى المحاولة لاحقاً';
+		if (e.status === 401) return 'انتهت الجلسة، يرجى تسجيل الدخول مجدداً';
+		if (e.status === 403) return 'ليس لديك صلاحية لهذا الإجراء';
+		if (e.status === 404) return 'العنصر المطلوب غير موجود';
+		if (e.status === 409) return e.message || 'يوجد تعارض في البيانات';
+		if (e.status >= 500) return 'خطأ في الخادم، يرجى المحاولة لاحقاً';
+		return e.message || fallback;
+	}
+	// A timeout aborts the fetch; anything else here is a transport failure.
+	if (e instanceof DOMException && e.name === 'AbortError') {
+		return 'انتهت مهلة الاتصال، تحقق من الإنترنت وحاول مجدداً';
+	}
+	if (e instanceof TypeError) return 'تعذّر الاتصال بالخادم، تحقق من الإنترنت';
+	return fallback;
+}

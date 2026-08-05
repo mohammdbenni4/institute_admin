@@ -3,16 +3,61 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-from institute_administration.modules.analytics.repository import SqlAlchemyAnalyticsRepository
+from institute_administration.modules.analytics.repository import (
+    AttendanceRow,
+    SqlAlchemyAnalyticsRepository,
+)
+from institute_administration.shared.application.pagination import Page
 
 # At-risk thresholds.
 _ABSENCE_THRESHOLD = 2
 _DECLINE_MIN_SESSIONS = 4
 _DECLINE_RATIO = 0.8
+
+
+@dataclass(frozen=True)
+class AttendanceStudent:
+    """One row of the attendance matrix: totals plus a packed per-day string."""
+
+    student_id: UUID
+    student_name: str
+    father_number: str | None
+    halaqah_id: UUID | None
+    halaqah_name: str | None
+    teacher_id: UUID | None
+    teacher_name: str | None
+    present: int  # every attended day, late ones included
+    late: int  # subset of `present`
+    absent: int
+    excused: int
+    total: int
+    rate: int
+    # One character per day of the window: P present, L late, A absent, E excused,
+    # '.' no record. A month costs ~31 bytes per student instead of a JSON object
+    # per record.
+    days: str
+
+
+@dataclass(frozen=True)
+class AttendanceMatrix:
+    date_from: date
+    date_to: date
+    days: int
+    items: list[AttendanceStudent]
+    total: int
+    limit: int
+    offset: int
+    # Summary over every matching student, not only this page.
+    students: int
+    total_present: int
+    total_late: int
+    total_absent: int
+    total_excused: int
+    average_rate: int
 
 
 @dataclass(frozen=True)
@@ -58,6 +103,91 @@ class AtRiskStudent:
 class AnalyticsService:
     def __init__(self, repository: SqlAlchemyAnalyticsRepository) -> None:
         self._repository = repository
+
+    async def attendance_matrix(
+        self,
+        date_from: date,
+        date_to: date,
+        *,
+        limit: int,
+        offset: int,
+        halaqah_id: UUID | None = None,
+        teacher_id: UUID | None = None,
+        search: str | None = None,
+        status: str | None = None,
+        on_day: date | None = None,
+        sort: str = "halaqah",
+        halaqah_ids: frozenset[UUID] | None = None,
+        order_collation: str | None = None,
+    ) -> AttendanceMatrix:
+        """The admin attendance heat-map, aggregated and paginated by the database.
+
+        Three bounded queries (page, totals, day details for the page) replace what
+        used to be dozens of sequential `/daily-records` calls plus a full in-browser
+        aggregation of every record in the month.
+        """
+        filters: dict[str, Any] = {
+            "halaqah_id": halaqah_id,
+            "teacher_id": teacher_id,
+            "search": search,
+            "status": status,
+            "on_day": on_day,
+            "halaqah_ids": halaqah_ids,
+        }
+        rows = await self._repository.attendance_page(
+            date_from,
+            date_to,
+            page=Page(limit=limit, offset=offset),
+            sort=sort,
+            order_collation=order_collation,
+            **filters,
+        )
+        totals = await self._repository.attendance_totals(date_from, date_to, **filters)
+        by_day = await self._repository.attendance_days(
+            [r.student_id for r in rows], date_from, date_to
+        )
+
+        span = (date_to - date_from).days + 1
+        items = [
+            self._to_student(row, by_day.get(row.student_id, {}), date_from, span) for row in rows
+        ]
+        return AttendanceMatrix(
+            date_from=date_from,
+            date_to=date_to,
+            days=span,
+            items=items,
+            total=totals.students,
+            limit=limit,
+            offset=offset,
+            students=totals.students,
+            total_present=totals.present,
+            total_late=totals.late,
+            total_absent=totals.absent,
+            total_excused=totals.excused,
+            average_rate=round(totals.rate_sum / totals.students) if totals.students else 0,
+        )
+
+    @staticmethod
+    def _to_student(
+        row: AttendanceRow, statuses: dict[date, str], date_from: date, span: int
+    ) -> AttendanceStudent:
+        days = "".join(statuses.get(date_from + timedelta(days=i), ".") for i in range(span))
+        return AttendanceStudent(
+            student_id=row.student_id,
+            student_name=row.student_name,
+            father_number=row.father_number,
+            halaqah_id=row.halaqah_id,
+            halaqah_name=row.halaqah_name,
+            teacher_id=row.teacher_id,
+            teacher_name=row.teacher_name,
+            present=row.present,
+            late=row.late,
+            absent=row.absent,
+            excused=row.excused,
+            total=row.total,
+            rate=round(row.present * 100 / row.total) if row.total else 0,
+            days=days,
+        )
 
     async def overview(
         self, date_from: date, date_to: date, halaqah_ids: frozenset[UUID] | None = None

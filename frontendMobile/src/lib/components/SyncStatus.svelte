@@ -1,14 +1,17 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import {
 		net,
 		syncNow,
 		syncState,
 		listPendingChanges,
 		discardChange,
+		retryRecord,
 		type PendingChange
 	} from '$lib/offline';
-	import { arabicNum, formatDateShort } from '$lib/utils';
+	import { formatDateShort } from '$lib/utils';
 	import Icon from './Icon.svelte';
+	import Loader from './Loader.svelte';
 
 	let showing = $state(false);
 	let items = $state<PendingChange[]>([]);
@@ -53,6 +56,17 @@
 		await reload();
 	}
 
+	/** Open the record that the server refused so the teacher can correct it. */
+	async function fixRecord(it: PendingChange) {
+		close();
+		await goto(`/halaqat/${it.halaqahId}/${it.studentId}/recitation?date=${it.dateIso}`);
+	}
+
+	async function retry(id: string) {
+		await retryRecord(id);
+		await reload();
+	}
+
 	// Keep the open sheet in sync as records upload (or arrive) in the background.
 	$effect(() => {
 		void syncState.pending;
@@ -67,14 +81,16 @@
 		class="fixed bottom-24 right-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 py-2 pe-3 ps-2.5 shadow-lg transition active:scale-95"
 		aria-label="عرض التغييرات غير المرفوعة"
 	>
-		<Icon
-			name={syncState.syncing ? 'progress_activity' : net.online ? 'cloud_off' : 'wifi_off'}
-			class={`text-lg text-amber-600 ${syncState.syncing ? 'animate-spin' : ''}`}
-		/>
+		{#if syncState.syncing}
+			<Loader class="text-lg text-amber-600" />
+		{:else}
+			<Icon name={net.online ? 'cloud_off' : 'wifi_off'} class="text-lg text-amber-600" />
+		{/if}
 		<span
-			class="min-w-[1.25rem] rounded-full bg-amber-500 px-1.5 py-0.5 text-center text-[11px] font-bold text-white"
+			class={'min-w-[1.25rem] rounded-full px-1.5 py-0.5 text-center text-[11px] font-bold text-white ' +
+				(syncState.rejected > 0 ? 'bg-error' : 'bg-amber-500')}
 		>
-			{arabicNum(syncState.pending)}
+			{syncState.pending}
 		</span>
 	</button>
 {:else}
@@ -106,7 +122,10 @@
 					</span>
 					{#if syncState.pending > 0}
 						<span class="text-[11px] text-on-surface-variant/60">
-							{arabicNum(syncState.pending)} سجل بانتظار الرفع
+							{syncState.pending} سجل بانتظار الرفع
+							{#if syncState.rejected > 0}
+								· <span class="font-bold text-error">{syncState.rejected} بحاجة إلى تصحيح</span>
+							{/if}
 						</span>
 					{/if}
 				</div>
@@ -160,6 +179,37 @@
 								<Icon name="delete" class="text-lg" />
 							</button>
 						</div>
+
+						{#if it.syncError}
+							<!-- The server refused this one. Say why, and offer the two things
+							     the teacher can actually do about it. -->
+							<div
+								class="mx-2 mb-1 mt-0.5 space-y-2 rounded-2xl border border-error/25 bg-error/5 p-3"
+							>
+								<p
+									class="flex items-start gap-1.5 text-[11px] font-bold leading-relaxed text-error"
+								>
+									<Icon name="error" class="shrink-0 text-[14px]" />
+									<span>{it.syncError}</span>
+								</p>
+								<div class="flex gap-2">
+									<button
+										type="button"
+										onclick={() => fixRecord(it)}
+										class="flex-1 rounded-full bg-error px-3 py-2 text-[11px] font-bold text-on-error active:scale-95"
+									>
+										تعديل السجل
+									</button>
+									<button
+										type="button"
+										onclick={() => retry(it.id)}
+										class="rounded-full bg-surface-container-high px-3 py-2 text-[11px] font-bold text-on-surface-variant active:scale-95"
+									>
+										إعادة المحاولة
+									</button>
+								</div>
+							</div>
+						{/if}
 
 						{#if expandedId === it.id}
 							<div class="mx-2 mb-1 mt-0.5 space-y-1.5 rounded-2xl bg-surface-container-low p-3">
@@ -221,7 +271,7 @@
 						class="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-sm font-bold text-white shadow-fab transition active:scale-[0.98] disabled:opacity-70"
 					>
 						{#if syncState.syncing}
-							<Icon name="progress_activity" class="animate-spin text-xl" /> جارٍ الرفع…
+							<Loader class="text-xl" /> جارٍ الرفع…
 						{:else}
 							<Icon name="cloud_upload" class="text-xl" /> رفع الآن
 						{/if}

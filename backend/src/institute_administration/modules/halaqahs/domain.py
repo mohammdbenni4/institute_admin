@@ -80,6 +80,11 @@ class HalaqahView:
     halaqah_type_id: UUID
     halaqah_type_name: str
     time_id: UUID | None
+    time_name: str | None
+    # Weekday -> {"from": "HH:MM", "to": "HH:MM"} for the days this halaqah meets.
+    # Carried on the view so the teacher app can work out the next session date
+    # without a second request (the /times endpoints are super-admin only).
+    schedule: dict[str, dict[str, str]]
     number_of_students: int
     created_at: datetime
     updated_at: datetime

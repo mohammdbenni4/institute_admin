@@ -11,10 +11,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from institute_administration.api.error_handlers import register_error_handlers
+from institute_administration.api.rate_limit import (
+    GENERAL,
+    RateLimitExceededError,
+    client_key,
+    limiter,
+    rate_limited_response,
+)
 from institute_administration.api.v1.router import api_router
 from institute_administration.core.config import Settings, get_settings
 from institute_administration.core.logging import configure_logging
@@ -60,6 +67,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     register_error_handlers(app)
+
+    @app.middleware("http")
+    async def _general_rate_limit(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Loose per-IP backstop. Auth endpoints add their own stricter rule.
+
+        Middleware sits outside the exception handlers, so the refusal is built
+        here rather than raised — a raised error would surface as a bare 500.
+        """
+        if request.method != "OPTIONS":
+            try:
+                limiter.check(client_key(request), GENERAL)
+            except RateLimitExceededError as exc:
+                return rate_limited_response(exc)
+        return await call_next(request)
+
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
     return app

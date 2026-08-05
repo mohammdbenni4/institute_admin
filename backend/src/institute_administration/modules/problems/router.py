@@ -140,9 +140,7 @@ async def update_level(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="حذف مستوى صعوبة",
 )
-async def delete_level(
-    level_id: UUID, service: LevelServiceDep, _: CurrentSuperAdmin
-) -> None:
+async def delete_level(level_id: UUID, service: LevelServiceDep, _: CurrentSuperAdmin) -> None:
     await service.delete(level_id)
 
 
@@ -162,9 +160,7 @@ async def create_problem(
     service: ProblemServiceDep,
     _: CurrentSuperAdmin,
 ) -> ProblemResponse:
-    problem = await service.create(
-        CreateProblemInput(name=payload.name, level_id=payload.level_id)
-    )
+    problem = await service.create(CreateProblemInput(name=payload.name, level_id=payload.level_id))
     return ProblemResponse.from_entity(problem)
 
 

@@ -4,6 +4,15 @@ import { api, qs } from './client';
 import type {
 	BulkAttendanceRequest,
 	BulkAttendanceResponse,
+	BulkUpsertRequest,
+	BulkUpsertResponse,
+	LatestRecitationsResponse,
+	NextExamItem,
+	ParentSummon,
+	ParentSummonCreate,
+	ParentSummonList,
+	UpcomingExam,
+	UpcomingExamCreate,
 	DailyRecord,
 	DailyRecordCreate,
 	DailyRecordUpdate,
@@ -51,7 +60,39 @@ export const dailyRecordsApi = {
 		api.patch<DailyRecord>(`/daily-records/${id}`, body),
 	remove: (id: UUID) => api.delete(`/daily-records/${id}`),
 	bulkAttendance: (body: BulkAttendanceRequest) =>
-		api.post<BulkAttendanceResponse>('/daily-records/bulk-attendance', body)
+		api.post<BulkAttendanceResponse>('/daily-records/bulk-attendance', body),
+	/** Idempotent batch upload keyed by (student, date) — one request per outbox drain. */
+	bulkUpsert: (body: BulkUpsertRequest) =>
+		api.post<BulkUpsertResponse>('/daily-records/bulk-upsert', body),
+	/** Per-student last recitation + last homework, with no date-window guessing. */
+	latestRecitations: (studentIds: UUID[], before?: string) =>
+		api.get<LatestRecitationsResponse>(
+			`/daily-records/latest-recitations?${studentIds
+				.map((id) => `student_ids=${encodeURIComponent(id)}`)
+				.join('&')}${before ? `&before=${before}` : ''}`
+		)
+};
+
+export const parentSummonsApi = {
+	list: (params?: PageParams & { status?: string; student_id?: UUID }) =>
+		api.get<ParentSummonList>(`/parent-summons${qs(params)}`),
+	create: (body: ParentSummonCreate) => api.post<ParentSummon>('/parent-summons', body)
+};
+
+export const upcomingExamsApi = {
+	list: (params?: PageParams & { student_id?: UUID; halaqah_id?: UUID; status?: string }) =>
+		api.get<{ items: UpcomingExam[]; total: number }>(`/upcoming-exams${qs(params)}`),
+	create: (body: UpcomingExamCreate) => api.post<UpcomingExam>('/upcoming-exams', body),
+	update: (id: UUID, body: Partial<UpcomingExamCreate> & { status?: string; clear?: string[] }) =>
+		api.patch<UpcomingExam>(`/upcoming-exams/${id}`, body),
+	remove: (id: UUID) => api.delete(`/upcoming-exams/${id}`),
+	/** The soonest pending exam per student — one request for a whole halaqah. */
+	next: (studentIds: UUID[]) =>
+		api.get<{ items: NextExamItem[] }>(
+			`/upcoming-exams/next?${studentIds
+				.map((id) => `student_ids=${encodeURIComponent(id)}`)
+				.join('&')}`
+		)
 };
 
 export const scoringApi = {

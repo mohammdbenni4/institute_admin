@@ -4,9 +4,12 @@ import { api, qs } from './client';
 import type {
 	AnalyticsOverview,
 	AtRiskResponse,
+	AttendanceMatrix,
+	AttendanceMatrixParams,
 	DailyRecord,
 	Halaqah,
 	HalaqahCreate,
+	InstituteSettings,
 	LeaderboardResponse,
 	Problem,
 	ProblemCreate,
@@ -19,8 +22,14 @@ import type {
 	HalaqahTypeCreate,
 	HalaqahTypeUpdate,
 	HalaqahUpdate,
+	DailyRecordCreate,
+	DailyRecordUpdate,
 	Paginated,
 	PageParams,
+	ParentSummon,
+	ParentSummonList,
+	ParentSummonUpdate,
+	UpcomingExam,
 	Student,
 	StudentCreate,
 	StudentImportResponse,
@@ -101,7 +110,12 @@ export const dailyRecordsApi = {
 			date_to?: string;
 		}
 	) => api.get<Paginated<DailyRecord>>(`/daily-records${qs(params)}`),
-	get: (id: UUID) => api.get<DailyRecord>(`/daily-records/${id}`)
+	get: (id: UUID) => api.get<DailyRecord>(`/daily-records/${id}`),
+	/** Partial update — used by the admin attendance editor so recording an إذن
+	 *  never overwrites the day's recitation, rating or points. */
+	update: (id: UUID, body: DailyRecordUpdate) =>
+		api.patch<DailyRecord>(`/daily-records/${id}`, body),
+	create: (body: DailyRecordCreate) => api.post<DailyRecord>('/daily-records', body)
 };
 
 type AnalyticsParams = { date_from?: string; date_to?: string };
@@ -111,7 +125,30 @@ export const analyticsApi = {
 		api.get<AnalyticsOverview>(`/analytics/overview${qs(params)}`),
 	leaderboard: (params?: AnalyticsParams & { top?: number }) =>
 		api.get<LeaderboardResponse>(`/analytics/halaqah-leaderboard${qs(params)}`),
-	atRisk: (params?: AnalyticsParams) => api.get<AtRiskResponse>(`/analytics/at-risk${qs(params)}`)
+	atRisk: (params?: AnalyticsParams) => api.get<AtRiskResponse>(`/analytics/at-risk${qs(params)}`),
+	/** Server-aggregated attendance heat-map: one row per student, already filtered,
+	 *  sorted and paginated (replaces paging every daily record of the month). */
+	attendanceMatrix: (params?: AttendanceMatrixParams) =>
+		api.get<AttendanceMatrix>(`/analytics/attendance-matrix${qs(params)}`)
+};
+
+export const instituteApi = {
+	get: () => api.get<InstituteSettings>('/institute-settings'),
+	update: (body: InstituteSettings) => api.put<InstituteSettings>('/institute-settings', body)
+};
+
+export const parentSummonsApi = {
+	list: (params?: PageParams & { status?: string; student_id?: UUID; teacher_id?: UUID }) =>
+		api.get<ParentSummonList>(`/parent-summons${qs(params)}`),
+	update: (id: UUID, body: ParentSummonUpdate) =>
+		api.patch<ParentSummon>(`/parent-summons/${id}`, body),
+	remove: (id: UUID) => api.delete(`/parent-summons/${id}`)
+};
+
+export const upcomingExamsApi = {
+	list: (params?: PageParams & { student_id?: UUID; halaqah_id?: UUID; status?: string }) =>
+		api.get<{ items: UpcomingExam[]; total: number }>(`/upcoming-exams${qs(params)}`),
+	remove: (id: UUID) => api.delete(`/upcoming-exams/${id}`)
 };
 
 export const scoringApi = {

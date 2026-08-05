@@ -27,6 +27,7 @@ class ScoringSettings:
     attitude_1_points: int
     absent_points: int = 0
     excused_points: int = 0
+    late_points: int = 5
 
     @classmethod
     def from_default(cls) -> ScoringSettings:
@@ -45,6 +46,7 @@ class ScoringSettings:
             attitude_1_points=DEFAULT_SCORING.attitude_points[1],
             absent_points=DEFAULT_SCORING.absent_points,
             excused_points=DEFAULT_SCORING.excused_points,
+            late_points=DEFAULT_SCORING.late_points,
         )
 
     def to_policy(self) -> ScoringPolicy:
@@ -52,6 +54,7 @@ class ScoringSettings:
             present_points=self.present_points,
             absent_points=self.absent_points,
             excused_points=self.excused_points,
+            late_points=self.late_points,
             rating_points={
                 4: self.rating_4_points,
                 3: self.rating_3_points,
@@ -88,6 +91,7 @@ def _to_settings(m: ScoringSettingsModel) -> ScoringSettings:
         attitude_1_points=m.attitude_1_points,
         absent_points=m.absent_points,
         excused_points=m.excused_points,
+        late_points=m.late_points,
     )
 
 
@@ -126,5 +130,6 @@ class SqlAlchemyScoringSettingsRepository:
         model.attitude_1_points = settings.attitude_1_points
         model.absent_points = settings.absent_points
         model.excused_points = settings.excused_points
+        model.late_points = settings.late_points
         await self._session.flush()
         return _to_settings(model)

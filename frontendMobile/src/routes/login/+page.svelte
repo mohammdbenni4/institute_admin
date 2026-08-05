@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { ApiError, login } from '$lib/api';
 	import Icon from '$lib/components/Icon.svelte';
+	import Loader from '$lib/components/Loader.svelte';
 
 	let email = $state('');
 	let password = $state('');
@@ -101,7 +102,7 @@
 				class="flex w-full items-center justify-center gap-2 rounded-full bg-brand py-3.5 text-sm font-bold text-white shadow-fab transition active:scale-[0.98] disabled:opacity-60"
 			>
 				{#if loading}
-					<Icon name="progress_activity" class="animate-spin text-xl" />
+					<Loader class="text-xl" />
 				{/if}
 				دخول
 			</button>

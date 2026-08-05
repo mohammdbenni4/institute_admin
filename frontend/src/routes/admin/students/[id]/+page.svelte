@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import PageHeader from '$lib/components/shared/PageHeader.svelte';
@@ -13,10 +14,23 @@
 		ApiError,
 		dailyRecordsApi,
 		halaqahsApi,
+		instituteApi,
 		studentsApi,
+		upcomingExamsApi,
 		type DailyRecord,
+		type UpcomingExam,
+		type InstituteSettings,
 		type Student
 	} from '$lib/api';
+	import MonthlyReport from '$lib/components/reports/MonthlyReport.svelte';
+	import ReportOptionsDialog from '$lib/components/reports/ReportOptionsDialog.svelte';
+	import { exportStudentReport } from '$lib/reports/export';
+	import {
+		DEFAULT_SECTIONS,
+		periodBounds,
+		type ReportPeriod,
+		type ReportSections
+	} from '$lib/reports/options';
 	import {
 		ORPHAN_LABELS,
 		attitudeLabel,
@@ -30,6 +44,7 @@
 	import {
 		ArrowRight,
 		CalendarCheck,
+		CalendarClock,
 		MessageCircle,
 		Printer,
 		Star,
@@ -137,6 +152,114 @@
 		if (r.exam_from == null && r.exam_to == null) return '—';
 		return `${r.exam_from ?? '—'} – ${r.exam_to ?? '—'}`;
 	}
+
+	// ─── الاختبارات القادمة ───────────────────────────────────────────────────
+	// Read-only here: teachers plan them in their app, the administration reviews.
+	let upcomingExams = $state<UpcomingExam[]>([]);
+
+	$effect(() => {
+		if (!id) return;
+		upcomingExamsApi
+			.list({ student_id: id, status: 'pending', limit: 20 })
+			.then((r) => (upcomingExams = r.items))
+			.catch(() => (upcomingExams = []));
+	});
+
+	// ─── Printed / exported report ────────────────────────────────────────────
+	// The report can span a different period than the page's month view, so it keeps
+	// its own records array and only refetches when the dialog asks for it.
+	let reportOpen = $state(false);
+	let reportBusy = $state(false);
+	let institute = $state<InstituteSettings | null>(null);
+	let teacherName = $state('');
+	let reportSections = $state<ReportSections>({ ...DEFAULT_SECTIONS });
+	let reportPeriod = $state<ReportPeriod>({
+		mode: 'month',
+		month: currentMonth(),
+		from: monthBounds(currentMonth()).from,
+		to: monthBounds(currentMonth()).to
+	});
+	let reportRecords = $state<DailyRecord[]>([]);
+
+	$effect(() => {
+		// The institute header (name, logo, phone) is needed before the first print.
+		if (!institute) {
+			instituteApi
+				.get()
+				.then((v) => (institute = v))
+				.catch(() => {});
+		}
+	});
+
+	$effect(() => {
+		// The report prints the teacher's name in the «الأستاذ» field.
+		const hid = student?.halaqah_id;
+		if (!hid) return;
+		halaqahsApi
+			.get(hid)
+			.then((h) => (teacherName = h.teacher_name))
+			.catch(() => {});
+	});
+
+	/** Fetch every record inside the report's period (the API caps `limit` at 200). */
+	async function fetchReportRecords(): Promise<DailyRecord[]> {
+		const { from, to } = periodBounds(reportPeriod);
+		const out: DailyRecord[] = [];
+		for (let offset = 0; ; offset += 200) {
+			const res = await dailyRecordsApi.list({
+				student_id: id,
+				date_from: from,
+				date_to: to,
+				limit: 200,
+				offset
+			});
+			out.push(...res.items);
+			if (out.length >= res.total || res.items.length === 0) break;
+		}
+		return out;
+	}
+
+	function openReport() {
+		reportPeriod.month = month;
+		const b = monthBounds(month);
+		reportPeriod.from = b.from;
+		reportPeriod.to = b.to;
+		reportOpen = true;
+	}
+
+	async function printReport() {
+		reportBusy = true;
+		try {
+			reportRecords = await fetchReportRecords();
+			reportOpen = false;
+			// Let the report render with the fetched period before the print dialog opens.
+			await tick();
+			window.print();
+		} catch (e) {
+			error = e instanceof ApiError ? e.message : 'تعذّر تحضير التقرير.';
+		} finally {
+			reportBusy = false;
+		}
+	}
+
+	async function exportReport() {
+		reportBusy = true;
+		try {
+			const rows = await fetchReportRecords();
+			await exportStudentReport({
+				student,
+				halaqahName,
+				period: reportPeriod,
+				records: rows,
+				sections: reportSections
+			});
+			reportOpen = false;
+		} catch (e) {
+			error = e instanceof ApiError ? e.message : 'تعذّر تصدير التقرير.';
+		} finally {
+			reportBusy = false;
+		}
+	}
 </script>
 
 <div class="page-container">
@@ -163,8 +286,8 @@
 					<MessageCircle class="h-4 w-4" />تواصل مع الأهل
 				</a>
 			{/if}
-			<Button onclick={() => window.print()} disabled={records.length === 0}>
-				<Printer class="h-4 w-4" />طباعة التقرير
+			<Button onclick={openReport}>
+				<Printer class="h-4 w-4" />تقرير الطالب
 			</Button>
 		{/snippet}
 	</PageHeader>
@@ -218,6 +341,35 @@
 		<Input id="month" type="month" bind:value={month} class="w-44" />
 		<span class="text-sm text-muted-foreground">{formatMonth(month)}</span>
 	</div>
+
+	<!-- الاختبارات القادمة -->
+	{#if upcomingExams.length > 0}
+		<div class="glass-card space-y-3 p-5">
+			<div class="flex items-center gap-2 text-sm font-bold text-foreground">
+				<CalendarClock class="h-4 w-4 text-primary" />الاختبارات القادمة
+			</div>
+			<div class="space-y-2">
+				{#each upcomingExams as ex (ex.id)}
+					<div
+						class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/30 px-4 py-2.5"
+					>
+						<div class="min-w-0">
+							<p class="text-sm font-semibold text-foreground">{ex.summary}</p>
+							{#if ex.notes}
+								<p class="truncate text-xs text-muted-foreground">{ex.notes}</p>
+							{/if}
+						</div>
+						<div class="flex items-center gap-3 text-xs">
+							<span class="text-muted-foreground">المعلم: {ex.teacher_name}</span>
+							<span class="rounded-full bg-primary/10 px-2.5 py-1 font-semibold text-primary">
+								{formatDate(ex.scheduled_date)}
+							</span>
+						</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<!-- KPIs -->
 	<div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -340,37 +492,25 @@
 	{/if}
 </Dialog>
 
-<!-- Printable monthly report (shown only when printing) -->
-<div id="print-report">
-	<div style="text-align:center; margin-bottom:16px;">
-		<h1 style="font-size:20px; font-weight:700;">صرح القرآن — التقرير الشهري</h1>
-		<p>{student?.full_name ?? ''} — حلقة: {halaqahName} — {formatMonth(month)}</p>
-	</div>
-	<div style="display:flex; gap:24px; justify-content:center; margin-bottom:16px; font-size:13px;">
-		<span>عدد الحصص: <b>{kpis.sessions}</b></span>
-		<span>نسبة الحضور: <b>{kpis.attendance}%</b></span>
-		<span>مجموع النقاط: <b>{kpis.points}</b></span>
-		<span>متوسط النقاط: <b>{kpis.avg}</b></span>
-	</div>
-	<table style="width:100%; border-collapse:collapse; font-size:12px;">
-		<thead>
-			<tr>
-				{#each ['التاريخ', 'الحضور', 'التقدير', 'التسميع', 'الأدب', 'النقاط'] as h (h)}
-					<th style="border:1px solid #ccc; padding:6px; background:#f3f4f6;">{h}</th>
-				{/each}
-			</tr>
-		</thead>
-		<tbody>
-			{#each byDateDesc as r (r.id)}
-				<tr>
-					<td style="border:1px solid #ccc; padding:6px;">{formatDate(r.record_date)}</td>
-					<td style="border:1px solid #ccc; padding:6px;">{r.present ? 'حاضر' : 'غائب'}</td>
-					<td style="border:1px solid #ccc; padding:6px;">{ratingLabel(r.rating)}</td>
-					<td style="border:1px solid #ccc; padding:6px;">{examRange(r)}</td>
-					<td style="border:1px solid #ccc; padding:6px;">{attitudeLabel(r.attitude)}</td>
-					<td style="border:1px solid #ccc; padding:6px; font-weight:700;">{r.total_points}</td>
-				</tr>
-			{/each}
-		</tbody>
-	</table>
-</div>
+<ReportOptionsDialog
+	bind:open={reportOpen}
+	bind:sections={reportSections}
+	bind:period={reportPeriod}
+	busy={reportBusy}
+	onPrint={printReport}
+	onExport={exportReport}
+/>
+
+<!-- The institute's paper report, laid out for printing. Hidden on screen by the
+     `@media print` rule in app.css, which shows only `#print-report`. -->
+{#if institute}
+	<MonthlyReport
+		{institute}
+		{student}
+		{teacherName}
+		{halaqahName}
+		period={reportPeriod}
+		records={reportRecords}
+		sections={reportSections}
+	/>
+{/if}

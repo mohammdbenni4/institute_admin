@@ -8,6 +8,7 @@
 		"build": "vite build",
 		"build:app": "BUILD_TARGET=app vite build --mode app",
 		"icons": "node scripts/make-icons.mjs",
+		"fonts": "node scripts/fetch-fonts.mjs",
 		"android:fit": "node scripts/android-fit.mjs",
 		"android:assets": "capacitor-assets generate --android",
 		"cap:sync": "npm run build:app && cap sync && npm run android:fit && npm run android:assets",

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,8 @@ def _to_entity(model: DailyRecordModel, problem_ids: list[UUID] | None = None) -
         record_date=model.record_date,
         present=model.present,
         excused=model.excused,
+        late=model.late,
+        excuse_reason=model.excuse_reason,
         exam_from=model.exam_from,
         exam_to=model.exam_to,
         exam_total=model.exam_total,
@@ -62,6 +65,8 @@ def _apply(model: DailyRecordModel, record: DailyRecord) -> None:
     model.record_date = record.record_date
     model.present = record.present
     model.excused = record.excused
+    model.late = record.late
+    model.excuse_reason = record.excuse_reason
     model.exam_from = record.exam_from
     model.exam_to = record.exam_to
     model.exam_total = record.exam_total
@@ -94,13 +99,9 @@ class SqlAlchemyDailyRecordRepository(DailyRecordRepository):
             )
         )
         for pid in problem_ids:
-            self._session.add(
-                DailyRecordProblemModel(daily_record_id=record_id, problem_id=pid)
-            )
+            self._session.add(DailyRecordProblemModel(daily_record_id=record_id, problem_id=pid))
 
-    async def _load_problem_ids_by_records(
-        self, record_ids: list[UUID]
-    ) -> dict[UUID, list[UUID]]:
+    async def _load_problem_ids_by_records(self, record_ids: list[UUID]) -> dict[UUID, list[UUID]]:
         if not record_ids:
             return {}
         result = await self._session.execute(
@@ -207,6 +208,76 @@ class SqlAlchemyDailyRecordRepository(DailyRecordRepository):
             stmt = stmt.where(DailyRecordModel.record_date <= date_to)
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
+
+    async def find_by_natural_keys(
+        self, keys: Sequence[tuple[UUID, date]]
+    ) -> dict[tuple[UUID, date], DailyRecord]:
+        if not keys:
+            return {}
+        stmt = select(DailyRecordModel).where(
+            tuple_(DailyRecordModel.student_id, DailyRecordModel.record_date).in_(keys)
+        )
+        result = await self._session.execute(stmt)
+        models = list(result.scalars().all())
+        if not models:
+            return {}
+        by_record = await self._load_problem_ids_by_records([m.id for m in models])
+        return {
+            (m.student_id, m.record_date): _to_entity(m, by_record.get(m.id, [])) for m in models
+        }
+
+    async def latest_recitations(
+        self, student_ids: Sequence[UUID], *, before: date | None = None
+    ) -> dict[UUID, DailyRecord]:
+        if not student_ids:
+            return {}
+        has_recitation = or_(
+            DailyRecordModel.rating.is_not(None),
+            DailyRecordModel.exam_from.is_not(None),
+            DailyRecordModel.exam_to.is_not(None),
+            DailyRecordModel.exam_total.is_not(None),
+            DailyRecordModel.revision_lesson.is_not(None),
+        )
+        stmt = select(DailyRecordModel).where(
+            DailyRecordModel.student_id.in_(student_ids), has_recitation
+        )
+        if before is not None:
+            stmt = stmt.where(DailyRecordModel.record_date < before)
+        # One row per student: the newest matching record.
+        stmt = stmt.distinct(DailyRecordModel.student_id).order_by(
+            DailyRecordModel.student_id,
+            DailyRecordModel.record_date.desc(),
+            DailyRecordModel.created_at.desc(),
+        )
+        result = await self._session.execute(stmt)
+        models = list(result.scalars().all())
+        if not models:
+            return {}
+        by_record = await self._load_problem_ids_by_records([m.id for m in models])
+        return {m.student_id: _to_entity(m, by_record.get(m.id, [])) for m in models}
+
+    async def latest_homework(
+        self, student_ids: Sequence[UUID], *, before: date | None = None
+    ) -> dict[UUID, str]:
+        if not student_ids:
+            return {}
+        stmt = (
+            select(DailyRecordModel.student_id, DailyRecordModel.homework)
+            .where(
+                DailyRecordModel.student_id.in_(student_ids),
+                DailyRecordModel.homework.is_not(None),
+                func.trim(DailyRecordModel.homework) != "",
+                *([DailyRecordModel.record_date < before] if before is not None else []),
+            )
+            .distinct(DailyRecordModel.student_id)
+            .order_by(
+                DailyRecordModel.student_id,
+                DailyRecordModel.record_date.desc(),
+                DailyRecordModel.created_at.desc(),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return {row.student_id: row.homework for row in result if row.homework is not None}
 
     async def delete(self, record: DailyRecord) -> None:
         model = await self._session.get(DailyRecordModel, record.id)

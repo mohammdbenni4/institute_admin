@@ -34,9 +34,11 @@ class DailyRecordResponse(BaseModel):
     record_date: date
     present: bool
     excused: bool
+    late: bool
+    excuse_reason: str | None
     exam_from: int | None
     exam_to: int | None
-    exam_total: int | None
+    exam_total: float | None
     homework: str | None
     problems: str | None
     rating: int | None
@@ -66,9 +68,11 @@ class DailyRecordResponse(BaseModel):
             record_date=record.record_date,
             present=record.present,
             excused=record.excused,
+            late=record.late,
+            excuse_reason=record.excuse_reason,
             exam_from=record.exam_from,
             exam_to=record.exam_to,
-            exam_total=record.exam_total,
+            exam_total=float(record.exam_total) if record.exam_total is not None else None,
             homework=record.homework,
             problems=record.problems,
             rating=record.rating,
@@ -111,17 +115,21 @@ class DailyRecordCreateRequest(BaseModel):
     halaqah_id: UUID
     present: bool
     excused: bool = False
+    late: bool = False
+    excuse_reason: str | None = Field(default=None, max_length=500)
     record_date: date | None = None
     exam_from: int | None = Field(default=None, ge=0)
     exam_to: int | None = Field(default=None, ge=0)
-    exam_total: int | None = Field(default=None, ge=0)
+    # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
+    exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)
     homework: str | None = None
     problems: str | None = None
     rating: int | None = Field(default=None, ge=1, le=4)
     revision_lesson: str | None = None
     revision_rating: int | None = Field(default=None, ge=1, le=4)
     attitude: int | None = Field(default=None, ge=1, le=3)
-    added_points: int = Field(default=0, ge=0)
+    # Signed: the teacher awards *and* deducts points («إضافة النقاط وحذفها»).
+    added_points: int = Field(default=0, ge=-1000, le=1000)
     notes: str | None = None
     problem_ids: list[UUID] = Field(default_factory=list)
 
@@ -132,6 +140,8 @@ class BulkAttendanceItem(BaseModel):
     student_id: UUID
     present: bool
     excused: bool = False
+    late: bool = False
+    excuse_reason: str | None = Field(default=None, max_length=500)
 
 
 class BulkAttendanceRequest(BaseModel):
@@ -151,6 +161,66 @@ class BulkAttendanceResponse(BaseModel):
     updated: int
 
 
+class BulkUpsertItem(BaseModel):
+    """One record keyed by ``(student_id, record_date)`` — a full overwrite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: UUID
+    record_date: date
+    present: bool = True
+    excused: bool = False
+    late: bool = False
+    excuse_reason: str | None = Field(default=None, max_length=500)
+    exam_from: int | None = Field(default=None, ge=0)
+    exam_to: int | None = Field(default=None, ge=0)
+    # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
+    exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)
+    homework: str | None = None
+    problems: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=4)
+    revision_lesson: str | None = None
+    revision_rating: int | None = Field(default=None, ge=1, le=4)
+    attitude: int | None = Field(default=None, ge=1, le=3)
+    # Signed: the teacher awards *and* deducts points («إضافة النقاط وحذفها»).
+    added_points: int = Field(default=0, ge=-1000, le=1000)
+    notes: str | None = None
+    problem_ids: list[UUID] = Field(default_factory=list)
+
+
+class BulkUpsertRequest(BaseModel):
+    """Create-or-overwrite a batch of records in a single round trip.
+
+    The offline teacher app drains its whole outbox with one call instead of a
+    lookup plus a write per record, which is what made uploads slow on a weak
+    connection.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    halaqah_id: UUID
+    teacher_id: UUID
+    records: list[BulkUpsertItem] = Field(min_length=1, max_length=200)
+
+
+class BulkUpsertResponse(BaseModel):
+    items: list[DailyRecordResponse]
+    created: int
+    updated: int
+
+
+class LatestRecitationItem(BaseModel):
+    """A student's last recitation and the homework they were last assigned."""
+
+    student_id: UUID
+    last_recitation: DailyRecordResponse | None = None
+    homework: str | None = None
+
+
+class LatestRecitationsResponse(BaseModel):
+    items: list[LatestRecitationItem]
+
+
 class DailyRecordUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -159,15 +229,18 @@ class DailyRecordUpdateRequest(BaseModel):
     record_date: date | None = None
     present: bool | None = None
     excused: bool | None = None
+    late: bool | None = None
+    excuse_reason: str | None = Field(default=None, max_length=500)
     exam_from: int | None = Field(default=None, ge=0)
     exam_to: int | None = Field(default=None, ge=0)
-    exam_total: int | None = Field(default=None, ge=0)
+    # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
+    exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)
     homework: str | None = None
     problems: str | None = None
     rating: int | None = Field(default=None, ge=1, le=4)
     revision_lesson: str | None = None
     revision_rating: int | None = Field(default=None, ge=1, le=4)
     attitude: int | None = Field(default=None, ge=1, le=3)
-    added_points: int | None = Field(default=None, ge=0)
+    added_points: int | None = Field(default=None, ge=-1000, le=1000)
     notes: str | None = None
     problem_ids: list[UUID] = Field(default_factory=list)

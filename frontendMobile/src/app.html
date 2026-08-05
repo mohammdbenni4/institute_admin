@@ -9,15 +9,15 @@
 		/>
 		<meta name="theme-color" content="#006c49" />
 		<meta name="description" content="تطبيق المعلم - صرح القرآن" />
-		<link rel="preconnect" href="https://fonts.googleapis.com" />
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<!-- Fonts are bundled (static/fonts + src/lib/fonts.css), never fetched: a missing
+		     icon font used to render every icon as its literal ligature name. Preloading the
+		     icon subset keeps the first paint free of icon pop-in. -->
 		<link
-			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@100;300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
-			rel="stylesheet"
-		/>
-		<link
-			href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block"
-			rel="stylesheet"
+			rel="preload"
+			href="%sveltekit.assets%/fonts/material-symbols-0.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
 		/>
 		%sveltekit.head%
 	</head>

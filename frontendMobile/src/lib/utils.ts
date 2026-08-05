@@ -23,29 +23,49 @@ export function addDays(iso: string, days: number): string {
 	return `${d.getFullYear()}-${m}-${day}`;
 }
 
-const _dateFmt = new Intl.DateTimeFormat('ar', {
-	weekday: 'long',
-	day: 'numeric',
-	month: 'long',
-	year: 'numeric'
-});
+// Arabic wording, Latin digits. `-u-nu-latn` keeps the weekday names Arabic while
+// forcing 0-9 instead of ٠-٩, so every number in the app reads the same way.
+const AR_LATN = 'ar-u-nu-latn';
 
-/** A long, human Arabic date, e.g. "الأربعاء ١٨ يونيو ٢٠٢٦". */
+// Levantine Gregorian month names. `Intl('ar')` returns the Egyptian/Gulf set
+// («يوليو»), but the institute is Syrian and its printed report says «تموز» — the
+// app and the report must not name the same month two different ways.
+const LEVANT_MONTHS = [
+	'كانون الثاني',
+	'شباط',
+	'آذار',
+	'نيسان',
+	'أيار',
+	'حزيران',
+	'تموز',
+	'آب',
+	'أيلول',
+	'تشرين الأول',
+	'تشرين الثاني',
+	'كانون الأول'
+] as const;
+
+/** Short Levantine month name for an ISO date. */
+function levantMonth(iso: string): string {
+	return LEVANT_MONTHS[Number(iso.slice(5, 7)) - 1] ?? '';
+}
+
+const _weekdayFmt = new Intl.DateTimeFormat(AR_LATN, { weekday: 'long' });
+
+/** A long, human date, e.g. "الأربعاء، 18 حزيران 2026". */
 export function formatDateArabic(iso: string): string {
-	return _dateFmt.format(new Date(iso + 'T00:00:00'));
+	const weekday = _weekdayFmt.format(new Date(iso + 'T00:00:00'));
+	return `${weekday}، ${Number(iso.slice(8, 10))} ${levantMonth(iso)} ${iso.slice(0, 4)}`;
 }
 
-const _shortFmt = new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'short' });
-
+/** Day + month, e.g. "18 حزيران". */
 export function formatDateShort(iso: string): string {
-	return _shortFmt.format(new Date(iso + 'T00:00:00'));
+	return `${Number(iso.slice(8, 10))} ${levantMonth(iso)}`;
 }
 
-const _monthFmt = new Intl.DateTimeFormat('ar', { month: 'long', year: 'numeric' });
-
-/** A human Arabic month + year, e.g. "يونيو ٢٠٢٦". */
+/** Month + year, e.g. "حزيران 2026". */
 export function formatMonthArabic(iso: string): string {
-	return _monthFmt.format(new Date(iso + 'T00:00:00'));
+	return `${levantMonth(iso)} ${iso.slice(0, 4)}`;
 }
 
 /** Add `delta` months to an ISO date, returning a new `YYYY-MM-DD`. */
@@ -72,6 +92,36 @@ export function whatsappLink(phone: string | null | undefined, message = ''): st
 	return `https://wa.me/${digits}${query}`;
 }
 
+// Weekday keys as the backend stores them, indexed by JS `Date.getDay()`
+// (0 = Sunday … 6 = Saturday).
+const WEEKDAY_KEYS = [
+	'sunday',
+	'monday',
+	'tuesday',
+	'wednesday',
+	'thursday',
+	'friday',
+	'saturday'
+] as const;
+
+/**
+ * The halaqah's next session strictly after `fromIso`, from its weekly timetable.
+ * Returns null when the halaqah has no schedule set. Scans two weeks so a single
+ * weekly session is still found.
+ */
+export function nextSessionDate(
+	schedule: Record<string, { from: string; to: string }> | undefined,
+	fromIso: string
+): string | null {
+	if (!schedule || Object.keys(schedule).length === 0) return null;
+	for (let step = 1; step <= 14; step++) {
+		const iso = addDays(fromIso, step);
+		const day = new Date(iso + 'T00:00:00').getDay();
+		if (schedule[WEEKDAY_KEYS[day]]) return iso;
+	}
+	return null;
+}
+
 /** Up to two leading letters for an avatar fallback. */
 export function initials(name: string): string {
 	const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -93,8 +143,18 @@ export function dayOfMonth(iso: string): number {
 	return Number(iso.slice(8, 10));
 }
 
-const _arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-/** Render a number with Arabic-Indic digits, e.g. 29 → ٢٩. */
-export function arabicNum(n: number | string): string {
-	return String(n).replace(/[0-9]/g, (d) => _arabicDigits[Number(d)]);
+/**
+ * Force Latin digits in a string that may carry Arabic-Indic ones.
+ *
+ * Numbers are written in Latin digits everywhere in the app now. This exists for
+ * *stored* text written by older versions — e.g. a `revision_lesson` saved as
+ * "الجزء ٢٩ (النصف الأول): نجح" — so history renders consistently with new records.
+ */
+export function toLatinDigits(value: string | number | null | undefined): string {
+	if (value == null) return '';
+	return String(value).replace(/[٠-٩۰-۹]/g, (d) => {
+		const code = d.charCodeAt(0);
+		const base = code >= 0x06f0 ? 0x06f0 : 0x0660;
+		return String(code - base);
+	});
 }

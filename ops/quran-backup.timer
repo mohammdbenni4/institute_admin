@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the institute database backup nightly
+
+[Timer]
+# 02:30 local time, with a short random delay so it never collides with anything
+# else scheduled on the hour.
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+# If the VPS was off at 02:30, run as soon as it is back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

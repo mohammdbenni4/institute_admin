@@ -65,3 +65,42 @@ class AtRiskResponse(BaseModel):
     date_from: date
     date_to: date
     items: list[AtRiskStudentResponse]
+
+
+class AttendanceStudentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    student_id: UUID
+    student_name: str
+    father_number: str | None
+    halaqah_id: UUID | None
+    halaqah_name: str | None
+    teacher_id: UUID | None
+    teacher_name: str | None
+    present: int
+    late: int
+    absent: int
+    excused: int
+    total: int
+    rate: int
+    days: str
+    """One character per day of the window: ``P`` present, ``L`` late, ``A`` absent,
+    ``E`` excused, ``.`` no record."""
+
+
+class AttendanceMatrixResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    date_from: date
+    date_to: date
+    days: int
+    items: list[AttendanceStudentResponse]
+    total: int
+    limit: int
+    offset: int
+    students: int
+    total_present: int
+    total_late: int
+    total_absent: int
+    total_excused: int
+    average_rate: int

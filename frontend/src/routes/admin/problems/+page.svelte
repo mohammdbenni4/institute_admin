@@ -152,8 +152,7 @@
 			deleteTarget = null;
 			await load();
 		} catch {
-			error =
-				deleteTarget?.kind === 'level' ? 'لا يمكن حذف مستوى يحتوي صعوبات' : 'فشل الحذف';
+			error = deleteTarget?.kind === 'level' ? 'لا يمكن حذف مستوى يحتوي صعوبات' : 'فشل الحذف';
 		} finally {
 			deleteSubmitting = false;
 		}
@@ -203,10 +202,14 @@
 	<!-- loading -->
 	{#if loading}
 		<div class="flex justify-center py-12">
-			<div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+			<div
+				class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"
+			></div>
 		</div>
 	{:else if levels.length === 0}
-		<div class="rounded-xl border border-dashed border-border p-12 text-center text-muted-foreground">
+		<div
+			class="rounded-xl border border-dashed border-border p-12 text-center text-muted-foreground"
+		>
 			لا توجد مستويات. أضف مستوى أولاً ثم أضف الصعوبات تحته.
 		</div>
 	{:else}

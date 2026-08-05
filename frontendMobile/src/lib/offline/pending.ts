@@ -2,7 +2,7 @@
 // a one-line summary per record plus a field-by-field old→new diff.
 
 import { ratingLabel, attitudeLabel } from '$lib/labels';
-import { arabicNum } from '$lib/utils';
+import { toLatinDigits } from '$lib/utils';
 import { db, type CachedRecord, type RecordBaseline } from './db';
 
 export interface FieldChange {
@@ -19,6 +19,11 @@ export interface PendingChange {
 	/** true = created locally (no server "before" state — everything is new). */
 	localOnly: boolean;
 	changes: FieldChange[];
+	/** Arabic reason the server refused this record, if it did. */
+	syncError: string | null;
+	/** Where to send the teacher to correct it. */
+	studentId: string;
+	halaqahId: string;
 }
 
 /** Anything with a value that a record can carry, formatted for display. */
@@ -26,6 +31,8 @@ type FieldSource = Pick<
 	CachedRecord,
 	| 'present'
 	| 'excused'
+	| 'late'
+	| 'excuse_reason'
 	| 'exam_from'
 	| 'exam_to'
 	| 'exam_total'
@@ -41,25 +48,29 @@ type FieldSource = Pick<
 
 const DASH = '—';
 
-function fmtAttendance(present: boolean, excused: boolean): string {
-	return present ? 'حاضر' : excused ? 'أذن' : 'غائب';
+function fmtAttendance(present: boolean, excused: boolean, late = false): string {
+	if (present) return late ? 'متأخر' : 'حاضر';
+	return excused ? 'أذن' : 'غائب';
 }
 
 function fmtExam(from: number | null, to: number | null, total: number | null): string {
-	if (from != null && to != null) return `من ${arabicNum(from)} إلى ${arabicNum(to)}`;
-	if (to != null) return `إلى ${arabicNum(to)}`;
-	if (from != null) return `من ${arabicNum(from)}`;
-	if (total != null) return `${arabicNum(total)} صفحة`;
+	if (from != null && to != null) return `من ${from} إلى ${to}`;
+	if (to != null) return `إلى ${to}`;
+	if (from != null) return `من ${from}`;
+	if (total != null) return `${total} صفحة`;
 	return DASH;
 }
 
+/** Free text as stored. `toLatinDigits` normalises records written by older app
+ *  versions, which saved Arabic-Indic digits (e.g. "الجزء ٢٩"). */
 function txt(v: string | null | undefined): string {
-	return v && v.trim() !== '' ? v : DASH;
+	return v && v.trim() !== '' ? toLatinDigits(v) : DASH;
 }
 
 /** Labelled, display-formatted view of the editable fields. */
 const FIELDS: { label: string; get: (r: FieldSource) => string }[] = [
-	{ label: 'الحضور', get: (r) => fmtAttendance(r.present, r.excused) },
+	{ label: 'الحضور', get: (r) => fmtAttendance(r.present, r.excused, r.late) },
+	{ label: 'سبب الإذن', get: (r) => txt(r.excuse_reason) },
 	{ label: 'التسميع', get: (r) => fmtExam(r.exam_from, r.exam_to, r.exam_total) },
 	{ label: 'التقدير', get: (r) => (r.rating != null ? ratingLabel(r.rating) : DASH) },
 	{ label: 'المراجعة', get: (r) => txt(r.revision_lesson) },
@@ -68,7 +79,7 @@ const FIELDS: { label: string; get: (r: FieldSource) => string }[] = [
 		get: (r) => (r.revision_rating != null ? ratingLabel(r.revision_rating) : DASH)
 	},
 	{ label: 'الأدب', get: (r) => (r.attitude != null ? attitudeLabel(r.attitude) : DASH) },
-	{ label: 'نقاط إضافية', get: (r) => arabicNum(r.added_points ?? 0) },
+	{ label: 'نقاط إضافية', get: (r) => String(r.added_points ?? 0) },
 	{ label: 'الواجب', get: (r) => txt(r.homework) },
 	{ label: 'ملاحظات', get: (r) => txt(r.notes) },
 	{ label: 'الصعوبات', get: (r) => txt(r.problems) }
@@ -89,7 +100,7 @@ function diff(rec: CachedRecord): FieldChange[] {
 /** A short Arabic one-liner of what a dirty record carries (collapsed view). */
 function describe(r: CachedRecord): string {
 	const bits: string[] = [];
-	bits.push(fmtAttendance(r.present, r.excused));
+	bits.push(fmtAttendance(r.present, r.excused, r.late));
 	if (r.rating != null || r.exam_to != null || r.exam_from != null || r.exam_total != null) {
 		bits.push('تسميع');
 	}
@@ -111,7 +122,10 @@ export async function listPendingChanges(): Promise<PendingChange[]> {
 			dateIso: r.record_date,
 			detail: describe(r),
 			localOnly: r.localOnly === 1,
-			changes: diff(r)
+			changes: diff(r),
+			syncError: r.syncError ?? null,
+			studentId: r.student_id,
+			halaqahId: r.halaqah_id
 		});
 	}
 	out.sort(

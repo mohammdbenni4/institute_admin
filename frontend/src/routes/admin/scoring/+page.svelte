@@ -20,7 +20,8 @@
 		attitude_2_points: 2,
 		attitude_1_points: 1,
 		absent_points: 0,
-		excused_points: 0
+		excused_points: 0,
+		late_points: 5
 	});
 	let loading = $state(true);
 	let saving = $state(false);
@@ -117,15 +118,43 @@
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
 					<div class="space-y-2">
 						<Label for="present">نقاط الحضور</Label>
-						<Input id="present" type="number" min="-100" max="100" bind:value={form.present_points} />
+						<Input
+							id="present"
+							type="number"
+							min="-100"
+							max="100"
+							bind:value={form.present_points}
+						/>
+					</div>
+					<div class="space-y-2">
+						<Label for="late_points">متأخر</Label>
+						<Input
+							id="late_points"
+							type="number"
+							min="-100"
+							max="100"
+							bind:value={form.late_points}
+						/>
 					</div>
 					<div class="space-y-2">
 						<Label for="excused_points">أذن (غياب بعذر)</Label>
-						<Input id="excused_points" type="number" min="-100" max="100" bind:value={form.excused_points} />
+						<Input
+							id="excused_points"
+							type="number"
+							min="-100"
+							max="100"
+							bind:value={form.excused_points}
+						/>
 					</div>
 					<div class="space-y-2">
 						<Label for="absent_points">غياب (بلا عذر)</Label>
-						<Input id="absent_points" type="number" min="-100" max="100" bind:value={form.absent_points} />
+						<Input
+							id="absent_points"
+							type="number"
+							min="-100"
+							max="100"
+							bind:value={form.absent_points}
+						/>
 					</div>
 				</div>
 			</div>

@@ -8,6 +8,7 @@ the repository writes them from the entity so they stay authoritative there.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
@@ -15,10 +16,12 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     ForeignKey,
+    Numeric,
     SmallInteger,
     Text,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +37,7 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("student_id", "record_date"),
         CheckConstraint("NOT (present AND excused)", name="excused_requires_absent"),
+        CheckConstraint("NOT (late AND NOT present)", name="late_requires_present"),
         CheckConstraint("rating IS NULL OR rating BETWEEN 1 AND 4", name="rating_range"),
         CheckConstraint(
             "revision_rating IS NULL OR revision_rating BETWEEN 1 AND 4",
@@ -43,7 +47,6 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("exam_from IS NULL OR exam_from >= 0", name="exam_from_non_negative"),
         CheckConstraint("exam_to IS NULL OR exam_to >= 0", name="exam_to_non_negative"),
         CheckConstraint("exam_total IS NULL OR exam_total >= 0", name="exam_total_non_negative"),
-        CheckConstraint("added_points >= 0", name="added_points_non_negative"),
     )
 
     student_id: Mapped[UUID] = mapped_column(
@@ -67,16 +70,26 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     record_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     present: Mapped[bool] = mapped_column(Boolean, nullable=False)
     excused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # «متأخر» — a qualifier on attendance, not a fourth state: late implies present.
+    late: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # Why the absence was excused (أذن). Required by the UIs, nullable in the
+    # database because records written before this column existed have none.
+    excuse_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     exam_from: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     exam_to: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-    exam_total: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # A *count* of pages, not a page number: teachers work in halves and quarters
+    # («نصف صفحة»), so this one is decimal while exam_from/exam_to stay integers.
+    exam_total: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
     homework: Mapped[str | None] = mapped_column(Text, nullable=True)
     problems: Mapped[str | None] = mapped_column(Text, nullable=True)
     rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     revision_lesson: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision_rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     attitude: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # Signed on purpose: teachers both award and deduct points.
     added_points: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

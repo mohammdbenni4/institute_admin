@@ -75,9 +75,7 @@ class SqlAlchemyProblemLevelRepository(ProblemLevelRepository):
         return [_level_to_entity(m) for m in result.scalars().all()]
 
     async def count(self) -> int:
-        result = await self._session.execute(
-            select(func.count()).select_from(ProblemLevelModel)
-        )
+        result = await self._session.execute(select(func.count()).select_from(ProblemLevelModel))
         return int(result.scalar_one())
 
     async def delete(self, level: ProblemLevel) -> None:
@@ -150,9 +148,8 @@ class SqlAlchemyProblemRepository(ProblemRepository):
         return result.first() is not None
 
     async def list(self, page: Page, *, level_id: UUID | None = None) -> list[Problem]:
-        stmt = (
-            select(ProblemModel, ProblemLevelModel.name)
-            .join(ProblemLevelModel, ProblemModel.problem_level_id == ProblemLevelModel.id)
+        stmt = select(ProblemModel, ProblemLevelModel.name).join(
+            ProblemLevelModel, ProblemModel.problem_level_id == ProblemLevelModel.id
         )
         if level_id is not None:
             stmt = stmt.where(ProblemModel.problem_level_id == level_id)
