@@ -86,6 +86,7 @@ const ICONS = [
 	'school',
 	'search',
 	'settings',
+	'share',
 	'star',
 	'sync',
 	'task_alt',

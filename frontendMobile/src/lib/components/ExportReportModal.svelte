@@ -7,6 +7,7 @@
 	import { attitudeLabel, ratingLabel } from '$lib/labels';
 	import { formatDateArabic, formatMonthArabic, todayIso } from '$lib/utils';
 	import { cn } from '$lib/utils';
+	import { isNativeApp, printReport, reportFileName, shareReportPdf } from '$lib/print';
 	import type { DailyRecord, Student } from '$lib/api';
 	import Icon from './Icon.svelte';
 	import Loader from './Loader.svelte';
@@ -107,6 +108,8 @@
 	let excluded = $state<Set<string>>(new Set());
 	let show = $state<ShowFlags>({ ...DEFAULT_SHOW });
 	let exporting = $state(false);
+	/** Shown in the sheet when the platform refuses to print or share. */
+	let exportError = $state('');
 	let printRows = $state<{ student: Student; records: DailyRecord[]; stats: StudentStats }[]>([]);
 
 	function loadSettings(): void {
@@ -187,11 +190,14 @@
 		return `من ${formatDateArabic(fromIso)} إلى ${formatDateArabic(toIso)}`;
 	}
 
-	async function runExport(): Promise<void> {
+	/** Build the printable DOM, then hand it to `deliver` (print dialog or share sheet).
+	 *  Both routes need exactly the same preparation, so it is written once. */
+	async function runExport(mode: 'print' | 'share' = 'print'): Promise<void> {
 		if (exporting || !from || !to) return;
 		const includedStudents = students.filter((s) => !excluded.has(s.id));
 		if (includedStudents.length === 0) return;
 		exporting = true;
+		exportError = '';
 		try {
 			const records = await repo.listMonthRecords(halaqahId, from, to, { force: true });
 			const byStudent = new Map<string, DailyRecord[]>();
@@ -208,9 +214,17 @@
 			});
 			saveSettings();
 			open = false;
-			// Let the #print-report DOM update flush before the print dialog blocks the tab.
-			await new Promise((r) => setTimeout(r, 50));
-			window.print();
+			const title = `تقرير ${halaqahName} — ${periodLabel(from, to)}`;
+			if (mode === 'share') {
+				await shareReportPdf(reportFileName(halaqahName, from, to), title);
+			} else {
+				await printReport(title);
+			}
+		} catch (e) {
+			// Android surfaces real failures here (no print service, share sheet refused).
+			// Before this the button simply did nothing and said nothing.
+			exportError = e instanceof Error ? e.message : 'تعذّر إخراج التقرير';
+			open = true;
 		} finally {
 			exporting = false;
 		}
@@ -335,18 +349,35 @@
 		</div>
 
 		<div class="border-t border-outline-variant/15 p-4">
+			{#if exportError}
+				<p class="mb-2 flex items-center gap-1.5 text-[12px] font-bold text-error">
+					<Icon name="error" class="text-[15px]" />
+					{exportError}
+				</p>
+			{/if}
 			<button
 				type="button"
-				onclick={runExport}
+				onclick={() => runExport('print')}
 				disabled={exporting || !from || !to || students.length === excluded.size}
 				class="flex w-full items-center justify-center gap-2 rounded-full bg-brand py-3.5 text-sm font-bold text-white active:scale-[0.98] disabled:opacity-60"
 			>
 				{#if exporting}
 					<Loader class="text-lg" /> جارٍ التحضير…
 				{:else}
-					<Icon name="print" class="text-lg" /> تصدير / طباعة
+					<Icon name="print" class="text-lg" /> طباعة / حفظ PDF
 				{/if}
 			</button>
+			{#if isNativeApp()}
+				<!-- Native only: a browser has no share sheet to hand a file to. -->
+				<button
+					type="button"
+					onclick={() => runExport('share')}
+					disabled={exporting || !from || !to || students.length === excluded.size}
+					class="mt-2 flex w-full items-center justify-center gap-2 rounded-full border border-brand/30 py-3 text-sm font-bold text-brand active:scale-[0.98] disabled:opacity-60"
+				>
+					<Icon name="share" class="text-lg" /> مشاركة PDF
+				</button>
+			{/if}
 		</div>
 	</div>
 {/if}
