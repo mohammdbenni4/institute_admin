@@ -77,6 +77,8 @@ class AttendanceStudentResponse(BaseModel):
     halaqah_name: str | None
     teacher_id: UUID | None
     teacher_name: str | None
+    # Every teacher of the halaqah, comma-separated («المعلم» column in the table).
+    teacher_names: str | None
     present: int
     late: int
     absent: int

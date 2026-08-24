@@ -78,7 +78,7 @@
 {#if syncState.pending > 0}
 	<button
 		onclick={open}
-		class="fixed bottom-24 right-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 py-2 pe-3 ps-2.5 shadow-lg transition active:scale-95"
+		class="fixed bottom-24 right-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 py-2 pe-3 ps-2.5 shadow-lg transition active:scale-95 print:hidden"
 		aria-label="عرض التغييرات غير المرفوعة"
 	>
 		{#if syncState.syncing}
@@ -96,7 +96,7 @@
 {:else}
 	<button
 		onclick={open}
-		class="fixed bottom-24 right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 shadow-lg transition active:scale-95"
+		class="fixed bottom-24 right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 shadow-lg transition active:scale-95 print:hidden"
 		aria-label="حالة المزامنة"
 	>
 		<Icon name="cloud_done" class="text-lg text-emerald-600" />
@@ -104,10 +104,14 @@
 {/if}
 
 {#if showing}
-	<button type="button" onclick={close} class="fixed inset-0 z-[60] bg-black/40" aria-label="إغلاق"
+	<button
+		type="button"
+		onclick={close}
+		class="fixed inset-0 z-[60] bg-black/40 print:hidden"
+		aria-label="إغلاق"
 	></button>
 	<div
-		class="fixed inset-x-0 bottom-0 z-[61] overflow-hidden rounded-t-[2rem] bg-surface-container-lowest shadow-2xl"
+		class="fixed inset-x-0 bottom-0 z-[61] overflow-hidden rounded-t-[2rem] bg-surface-container-lowest shadow-2xl print:hidden"
 		dir="rtl"
 	>
 		<div class="flex items-center justify-between border-b border-outline-variant/10 px-5 py-4">

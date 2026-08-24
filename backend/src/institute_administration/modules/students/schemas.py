@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from institute_administration.modules.students.domain import OrphanStatus, Student
+from institute_administration.modules.students.domain import OrphanStatus, Student, StudentType
 
 
 class StudentResponse(BaseModel):
@@ -22,6 +22,8 @@ class StudentResponse(BaseModel):
     accepted_at: date | None
     notes: str | None
     halaqah_id: UUID | None
+    student_type: StudentType | None
+    scoring_preset_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -39,6 +41,8 @@ class StudentResponse(BaseModel):
             accepted_at=student.accepted_at,
             notes=student.notes,
             halaqah_id=student.halaqah_id,
+            student_type=student.student_type,
+            scoring_preset_id=student.scoring_preset_id,
             created_at=student.created_at,
             updated_at=student.updated_at,
         )
@@ -64,6 +68,8 @@ class StudentCreateRequest(BaseModel):
     accepted_at: date | None = None
     notes: str | None = None
     halaqah_id: UUID | None = None
+    student_type: StudentType | None = None
+    scoring_preset_id: UUID | None = None
 
 
 class StudentUpdateRequest(BaseModel):
@@ -79,6 +85,26 @@ class StudentUpdateRequest(BaseModel):
     accepted_at: date | None = None
     notes: str | None = None
     halaqah_id: UUID | None = None
+    student_type: StudentType | None = None
+    scoring_preset_id: UUID | None = None
+
+
+class StudentTrackUpdateRequest(BaseModel):
+    """The two teaching preferences a *teacher* may change on their own students.
+
+    Deliberately separate from :class:`StudentUpdateRequest`, which stays super-admin
+    only: the teacher app needs to set a student's track and pricing preset from
+    halaqah settings, and that must not come bundled with the ability to rename a
+    child, edit a guardian's phone number, or move them to another halaqah.
+
+    Both fields are ``exclude_unset``-sensitive — the mobile UI PATCHes one at a
+    time — so ``None`` explicitly clears, while omission leaves the value alone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    student_type: StudentType | None = None
+    scoring_preset_id: UUID | None = None
 
 
 class StudentImportRequest(BaseModel):

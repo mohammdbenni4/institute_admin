@@ -20,6 +20,8 @@ class CreateHalaqahInput:
     name: str
     teacher_id: UUID
     halaqah_type_id: UUID
+    # Additional members; the responsible `teacher_id` is always one regardless.
+    teacher_ids: list[UUID] | None = None
     level: str | None = None
     age: str | None = None
     time_id: UUID | None = None
@@ -29,6 +31,7 @@ class CreateHalaqahInput:
 class UpdateHalaqahInput:
     name: str | Unset = UNSET
     teacher_id: UUID | Unset = UNSET
+    teacher_ids: list[UUID] | None | Unset = UNSET
     halaqah_type_id: UUID | Unset = UNSET
     level: str | None | Unset = UNSET
     age: str | None | Unset = UNSET
@@ -49,6 +52,8 @@ class HalaqahService:
             time_id=data.time_id,
         )
         await self._halaqahs.add(halaqah)
+        if data.teacher_ids is not None:
+            await self._halaqahs.set_teachers(halaqah.id, data.teacher_ids)
         return await self._require_view(halaqah.id)
 
     async def get(self, halaqah_id: UUID) -> HalaqahView:
@@ -78,6 +83,10 @@ class HalaqahService:
         if data.time_id is not UNSET:
             halaqah.time_id = data.time_id
         await self._halaqahs.update(halaqah)
+        # After update(), so the (possibly new) responsible teacher is already a
+        # member and cannot be dropped by this replacement.
+        if data.teacher_ids is not UNSET and data.teacher_ids is not None:
+            await self._halaqahs.set_teachers(halaqah_id, data.teacher_ids)
         return await self._require_view(halaqah_id)
 
     async def delete(self, halaqah_id: UUID) -> None:

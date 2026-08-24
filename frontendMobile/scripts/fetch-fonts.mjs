@@ -17,6 +17,10 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'static', 'fonts');
 const CSS_OUT = join(ROOT, 'src', 'lib', 'fonts.css');
+// Record of which icons the vendored font actually contains. `npm run icons:check`
+// compares it against ICONS below, so editing the list without re-running this
+// script fails the build instead of shipping an icon that renders as its own name.
+const MANIFEST_OUT = join(OUT_DIR, 'icons.json');
 
 // A modern desktop UA is required or Google serves the much larger .ttf format.
 const UA =
@@ -81,6 +85,7 @@ const ICONS = [
 	'save',
 	'school',
 	'search',
+	'settings',
 	'star',
 	'sync',
 	'task_alt',
@@ -170,6 +175,9 @@ async function main() {
 
 	await writeFile(CSS_OUT, `${header}\n${blocks.join('\n')}`);
 	console.log(`Wrote ${CSS_OUT}`);
+
+	await writeFile(MANIFEST_OUT, `${JSON.stringify({ icons: ICONS }, null, '\t')}\n`);
+	console.log(`Wrote ${MANIFEST_OUT} (${ICONS.length} icons)`);
 }
 
 await main();

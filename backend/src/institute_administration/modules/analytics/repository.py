@@ -17,7 +17,7 @@ from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from institute_administration.modules.daily_records.models import DailyRecordModel
-from institute_administration.modules.halaqahs.models import HalaqahModel
+from institute_administration.modules.halaqahs.models import HalaqahModel, HalaqahTeacherModel
 from institute_administration.modules.identity.models import UserModel
 from institute_administration.modules.students.models import StudentModel
 from institute_administration.modules.teachers.models import TeacherModel
@@ -37,6 +37,33 @@ class PeriodRow:
     record_date: date
 
 
+# All of a halaqah's teachers as one comma-separated string. A correlated scalar
+# subquery so it can ride along without touching the matrix query's GROUP BY.
+_all_teacher_names = (
+    select(func.string_agg(UserModel.full_name, ", "))
+    .select_from(HalaqahTeacherModel)
+    .join(TeacherModel, HalaqahTeacherModel.teacher_id == TeacherModel.id)
+    .join(UserModel, TeacherModel.user_id == UserModel.id)
+    .where(HalaqahTeacherModel.halaqah_id == HalaqahModel.id)
+    .correlate(HalaqahModel)
+    .scalar_subquery()
+)
+
+
+def _teaches(teacher_id: UUID) -> Any:
+    """Filtering by teacher must match every halaqah they teach, not only the ones
+    they are responsible for."""
+    return (
+        select(HalaqahTeacherModel.teacher_id)
+        .where(
+            HalaqahTeacherModel.halaqah_id == HalaqahModel.id,
+            HalaqahTeacherModel.teacher_id == teacher_id,
+        )
+        .correlate(HalaqahModel)
+        .exists()
+    )
+
+
 @dataclass(frozen=True)
 class AttendanceRow:
     """One student's month of attendance, already aggregated by the database."""
@@ -47,7 +74,10 @@ class AttendanceRow:
     halaqah_id: UUID | None
     halaqah_name: str | None
     teacher_id: UUID | None
+    # The responsible teacher — kept as its own field because the table links to them.
     teacher_name: str | None
+    # Every teacher of the halaqah, comma-separated, for the «المعلم» column.
+    teacher_names: str | None
     present: int  # every attended day, late ones included
     late: int  # subset of `present`
     absent: int
@@ -137,13 +167,16 @@ class SqlAlchemyAnalyticsRepository:
 
         stmt = (
             select(
-                StudentModel.id,
-                StudentModel.full_name,
-                StudentModel.father_number,
-                HalaqahModel.id,
-                HalaqahModel.name,
-                TeacherModel.id,
-                UserModel.full_name,
+                # Labelled, not positional: the row is unpacked by name below, so a
+                # column added here can never silently shift another one's meaning.
+                StudentModel.id.label("student_id"),
+                StudentModel.full_name.label("student_name"),
+                StudentModel.father_number.label("father_number"),
+                HalaqahModel.id.label("halaqah_id"),
+                HalaqahModel.name.label("halaqah_name"),
+                TeacherModel.id.label("teacher_id"),
+                UserModel.full_name.label("teacher_name"),
+                _all_teacher_names.label("teacher_names"),
                 func.count(DailyRecordModel.id)
                 .filter(DailyRecordModel.present.is_(True))
                 .label("present"),
@@ -186,7 +219,7 @@ class SqlAlchemyAnalyticsRepository:
         if halaqah_id is not None:
             stmt = stmt.where(StudentModel.halaqah_id == halaqah_id)
         if teacher_id is not None:
-            stmt = stmt.where(HalaqahModel.teacher_id == teacher_id)
+            stmt = stmt.where(_teaches(teacher_id))
         if halaqah_ids is not None:
             stmt = stmt.where(StudentModel.halaqah_id.in_(halaqah_ids))
         if search:
@@ -275,18 +308,19 @@ class SqlAlchemyAnalyticsRepository:
         result = await self._session.execute(stmt.limit(page.limit).offset(page.offset))
         return [
             AttendanceRow(
-                student_id=row[0],
-                student_name=row[1],
-                father_number=row[2],
-                halaqah_id=row[3],
-                halaqah_name=row[4],
-                teacher_id=row[5],
-                teacher_name=row[6],
-                present=row[7],
-                late=row[8],
-                absent=row[9],
-                excused=row[10],
-                total=row[11],
+                student_id=row.student_id,
+                student_name=row.student_name,
+                father_number=row.father_number,
+                halaqah_id=row.halaqah_id,
+                halaqah_name=row.halaqah_name,
+                teacher_id=row.teacher_id,
+                teacher_name=row.teacher_name,
+                teacher_names=row.teacher_names,
+                present=row.present,
+                late=row.late,
+                absent=row.absent,
+                excused=row.excused,
+                total=row.total,
             )
             for row in result.all()
         ]

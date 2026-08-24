@@ -47,15 +47,25 @@ from institute_administration.modules.identity.dependencies import (
 )
 from institute_administration.modules.identity.domain import User, UserRole
 from institute_administration.modules.problems.repository import SqlAlchemyProblemRepository
-from institute_administration.modules.scoring.repository import SqlAlchemyScoringSettingsRepository
+from institute_administration.modules.scoring.repository import (
+    SqlAlchemyScoringSettingsRepository,
+    StudentScoringPolicyResolver,
+)
 from institute_administration.modules.students.repository import SqlAlchemyStudentRepository
 from institute_administration.shared.application.exceptions import AuthorizationError
 from institute_administration.shared.application.pagination import Page
 
 
 async def get_service(session: DbSession) -> DailyRecordService:
+    """Build the service with a per-student policy resolver.
+
+    `policy` stays the institute-wide fallback (and keeps the service usable
+    without a database); the resolver overrides it for students pinned to a
+    named scoring preset.
+    """
     policy = await SqlAlchemyScoringSettingsRepository(session).get_policy()
-    return DailyRecordService(SqlAlchemyDailyRecordRepository(session), policy)
+    resolver = StudentScoringPolicyResolver(session)
+    return DailyRecordService(SqlAlchemyDailyRecordRepository(session), policy, resolver)
 
 
 ServiceDep = Annotated[DailyRecordService, Depends(get_service)]

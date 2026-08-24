@@ -126,3 +126,26 @@ def test_revalidate_catches_post_mutation_violation() -> None:
     record.rating = 9
     with pytest.raises(InvalidRatingError):
         record.revalidate()
+
+
+# --- رشيدي line numbers ------------------------------------------------------
+
+
+@pytest.mark.parametrize("line", [1, 7, 10, 15])
+def test_exam_lines_accept_any_line_on_a_page(line: int) -> None:
+    record = _make(exam_from=18, exam_to=18, exam_from_line=line, exam_to_line=line)
+    assert record.exam_from_line == line
+    assert record.exam_to_line == line
+
+
+def test_exam_lines_default_to_none_for_quran_students() -> None:
+    record = _make(exam_from=18, exam_to=20)
+    assert record.exam_from_line is None
+    assert record.exam_to_line is None
+
+
+@pytest.mark.parametrize("field", ["exam_from_line", "exam_to_line"])
+def test_exam_line_below_one_is_rejected(field: str) -> None:
+    # Lines are 1-based; 0 is a client bug, not «the whole page».
+    with pytest.raises(InvalidExamRangeError):
+        _make(exam_from=18, exam_to=18, **{field: 0})

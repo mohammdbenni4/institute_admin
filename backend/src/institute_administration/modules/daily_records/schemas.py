@@ -37,6 +37,8 @@ class DailyRecordResponse(BaseModel):
     late: bool
     excuse_reason: str | None
     exam_from: int | None
+    exam_from_line: int | None
+    exam_to_line: int | None
     exam_to: int | None
     exam_total: float | None
     homework: str | None
@@ -71,6 +73,8 @@ class DailyRecordResponse(BaseModel):
             late=record.late,
             excuse_reason=record.excuse_reason,
             exam_from=record.exam_from,
+            exam_from_line=record.exam_from_line,
+            exam_to_line=record.exam_to_line,
             exam_to=record.exam_to,
             exam_total=float(record.exam_total) if record.exam_total is not None else None,
             homework=record.homework,
@@ -119,6 +123,11 @@ class DailyRecordCreateRequest(BaseModel):
     excuse_reason: str | None = Field(default=None, max_length=500)
     record_date: date | None = None
     exam_from: int | None = Field(default=None, ge=0)
+    # A line number, so it starts at 1. The upper bound is generous on purpose:
+    # رشيدي pages hold 10 lines and mushaf pages 15, and neither is the API's
+    # business to enforce.
+    exam_from_line: int | None = Field(default=None, ge=1, le=50)
+    exam_to_line: int | None = Field(default=None, ge=1, le=50)
     exam_to: int | None = Field(default=None, ge=0)
     # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
     exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)
@@ -173,6 +182,11 @@ class BulkUpsertItem(BaseModel):
     late: bool = False
     excuse_reason: str | None = Field(default=None, max_length=500)
     exam_from: int | None = Field(default=None, ge=0)
+    # A line number, so it starts at 1. The upper bound is generous on purpose:
+    # رشيدي pages hold 10 lines and mushaf pages 15, and neither is the API's
+    # business to enforce.
+    exam_from_line: int | None = Field(default=None, ge=1, le=50)
+    exam_to_line: int | None = Field(default=None, ge=1, le=50)
     exam_to: int | None = Field(default=None, ge=0)
     # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
     exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)
@@ -232,6 +246,11 @@ class DailyRecordUpdateRequest(BaseModel):
     late: bool | None = None
     excuse_reason: str | None = Field(default=None, max_length=500)
     exam_from: int | None = Field(default=None, ge=0)
+    # A line number, so it starts at 1. The upper bound is generous on purpose:
+    # رشيدي pages hold 10 lines and mushaf pages 15, and neither is the API's
+    # business to enforce.
+    exam_from_line: int | None = Field(default=None, ge=1, le=50)
+    exam_to_line: int | None = Field(default=None, ge=1, le=50)
     exam_to: int | None = Field(default=None, ge=0)
     # Decimal on purpose: «نصف صفحة» is a real entry. Two places is plenty.
     exam_total: float | None = Field(default=None, ge=0, le=999.99, multiple_of=0.01)

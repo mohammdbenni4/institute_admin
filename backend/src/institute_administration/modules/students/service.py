@@ -11,6 +11,7 @@ from institute_administration.modules.students.domain import (
     Student,
     StudentNotFoundError,
     StudentRepository,
+    StudentType,
 )
 from institute_administration.shared.application.pagination import Page
 from institute_administration.shared.application.sentinels import UNSET, Unset
@@ -28,6 +29,8 @@ class CreateStudentInput:
     accepted_at: date | None = None
     notes: str | None = None
     halaqah_id: UUID | None = None
+    student_type: StudentType | None = None
+    scoring_preset_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,8 @@ class UpdateStudentInput:
     accepted_at: date | None | Unset = UNSET
     notes: str | None | Unset = UNSET
     halaqah_id: UUID | None | Unset = UNSET
+    student_type: StudentType | None | Unset = UNSET
+    scoring_preset_id: UUID | None | Unset = UNSET
 
 
 class StudentService:
@@ -60,6 +65,8 @@ class StudentService:
             accepted_at=data.accepted_at,
             notes=data.notes,
             halaqah_id=data.halaqah_id,
+            student_type=data.student_type,
+            scoring_preset_id=data.scoring_preset_id,
         )
         await self._students.add(student)
         return await self.get(student.id)
@@ -125,6 +132,10 @@ class StudentService:
             student.notes = data.notes
         if data.halaqah_id is not UNSET:
             student.halaqah_id = data.halaqah_id
+        if data.student_type is not UNSET:
+            student.student_type = data.student_type
+        if data.scoring_preset_id is not UNSET:
+            student.scoring_preset_id = data.scoring_preset_id
         await self._students.update(student)
         return await self.get(student_id)
 

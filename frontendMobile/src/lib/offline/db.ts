@@ -5,6 +5,12 @@
 import Dexie, { type Table } from 'dexie';
 import type { DailyRecord, Halaqah, Problem, Student } from '$lib/api';
 
+/** A halaqah in the cache, with its membership flattened for the multiEntry index.
+ *  Dexie can only index a plain array of keys, not `teachers[].id`. */
+export interface CachedHalaqah extends Halaqah {
+	teacher_ids: string[];
+}
+
 /** The editable fields captured before local edits began (server truth), used to
  * show an old→new diff and to revert a single un-uploaded change. `null` = the
  * record was created locally and has no server-side "before" state. */
@@ -16,6 +22,8 @@ export type RecordBaseline = Pick<
 	| 'excuse_reason'
 	| 'exam_from'
 	| 'exam_to'
+	| 'exam_from_line'
+	| 'exam_to_line'
 	| 'exam_total'
 	| 'homework'
 	| 'problems'
@@ -53,6 +61,14 @@ export interface MetaRow {
 	value: unknown;
 }
 
+/** A daily record deleted on the device, waiting for the server to drop it too.
+ *  Deletes are never edited, so — like summons — it's a fire-and-forget outbox. */
+export interface PendingDelete {
+	/** The server's record id (a `local:` row is dropped locally and never queued here). */
+	id: string;
+	created_at: string;
+}
+
 /** A «استدعاء ولي الأمر» raised on the device, waiting to reach the server.
  *
  *  Requests get their own outbox rather than riding on the daily-record one: they
@@ -70,12 +86,13 @@ export interface PendingSummon {
 }
 
 class TeacherDB extends Dexie {
-	halaqahs!: Table<Halaqah, string>;
+	halaqahs!: Table<CachedHalaqah, string>;
 	students!: Table<Student, string>;
 	records!: Table<CachedRecord, string>;
 	problems!: Table<Problem, string>;
 	meta!: Table<MetaRow, string>;
 	pendingSummons!: Table<PendingSummon, string>;
+	pendingDeletes!: Table<PendingDelete, string>;
 
 	constructor() {
 		super('teacher-offline');
@@ -98,6 +115,43 @@ class TeacherDB extends Dexie {
 			meta: 'key',
 			pendingSummons: 'id, created_at'
 		});
+		// v3 adds the record-deletion outbox (un-marking an attendance status that had
+		// already been saved).
+		this.version(3).stores({
+			halaqahs: 'id, teacher_id',
+			students: 'id, halaqah_id',
+			records: 'id, &[student_id+record_date], student_id, halaqah_id, record_date, dirty',
+			problems: 'id',
+			meta: 'key',
+			pendingSummons: 'id, created_at',
+			pendingDeletes: 'id, created_at'
+		});
+		// v4: a halaqah now has many teachers. `teacher_id` still names the responsible
+		// one, so looking a teacher's halaqahs up by it would hide every halaqah they
+		// merely assist with — invisible offline while working fine online, the worst
+		// kind of bug. `*teacher_ids` is a multiEntry index: one entry per member, so
+		// `.where('teacher_ids').equals(id)` finds a halaqah for any of its teachers.
+		this.version(4)
+			.stores({
+				halaqahs: 'id, teacher_id, *teacher_ids',
+				students: 'id, halaqah_id',
+				records: 'id, &[student_id+record_date], student_id, halaqah_id, record_date, dirty',
+				problems: 'id',
+				meta: 'key',
+				pendingSummons: 'id, created_at',
+				pendingDeletes: 'id, created_at'
+			})
+			.upgrade(async (tx) => {
+				// Existing cached halaqahs predate `teachers`; seed membership from the
+				// responsible teacher so an offline upgrade keeps showing them until the
+				// next successful refresh replaces them with the server's full list.
+				await tx
+					.table('halaqahs')
+					.toCollection()
+					.modify((h: { teacher_id?: string; teacher_ids?: string[] }) => {
+						if (!h.teacher_ids?.length && h.teacher_id) h.teacher_ids = [h.teacher_id];
+					});
+			});
 	}
 }
 
@@ -132,6 +186,11 @@ export async function pendingSummonCount(): Promise<number> {
 	return db.pendingSummons.count();
 }
 
+/** Count of record deletions still waiting to reach the server. */
+export async function pendingDeleteCount(): Promise<number> {
+	return db.pendingDeletes.count();
+}
+
 /** Wipe everything (on logout — the cache holds student PII). */
 export async function clearOfflineData(): Promise<void> {
 	await Promise.all([
@@ -140,6 +199,7 @@ export async function clearOfflineData(): Promise<void> {
 		db.records.clear(),
 		db.problems.clear(),
 		db.meta.clear(),
-		db.pendingSummons.clear()
+		db.pendingSummons.clear(),
+		db.pendingDeletes.clear()
 	]);
 }

@@ -25,6 +25,19 @@ class OrphanStatus(StrEnum):
     BOTH = "both"
 
 
+class StudentType(StrEnum):
+    """The memorisation track a student follows.
+
+    ``QURAN`` students recite from the mushaf and are located by جزء/سورة/آية;
+    ``RASHIDI`` students work through the 48-page «رشيدي» primer and are located
+    by مرحلة/صفحة/سطر instead. ``None`` means the track was never set — treated
+    as قرآن everywhere, which is what every existing student is.
+    """
+
+    RASHIDI = "rashidi"
+    QURAN = "quran"
+
+
 class Student(AggregateRoot[UUID]):
     def __init__(
         self,
@@ -40,6 +53,8 @@ class Student(AggregateRoot[UUID]):
         accepted_at: date | None = None,
         notes: str | None = None,
         halaqah_id: UUID | None = None,
+        student_type: StudentType | None = None,
+        scoring_preset_id: UUID | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> None:
@@ -54,6 +69,9 @@ class Student(AggregateRoot[UUID]):
         self.accepted_at = accepted_at
         self.notes = notes
         self.halaqah_id = halaqah_id
+        self.student_type = student_type
+        # None = priced by the institute-wide scoring_settings row.
+        self.scoring_preset_id = scoring_preset_id
         self.created_at = created_at
         self.updated_at = updated_at
 
@@ -71,6 +89,8 @@ class Student(AggregateRoot[UUID]):
         accepted_at: date | None = None,
         notes: str | None = None,
         halaqah_id: UUID | None = None,
+        student_type: StudentType | None = None,
+        scoring_preset_id: UUID | None = None,
     ) -> Student:
         return cls(
             id=uuid4(),
@@ -84,6 +104,8 @@ class Student(AggregateRoot[UUID]):
             accepted_at=accepted_at,
             notes=notes,
             halaqah_id=halaqah_id,
+            student_type=student_type,
+            scoring_preset_id=scoring_preset_id,
         )
 
 
@@ -122,4 +144,9 @@ class StudentNotFoundError(EntityNotFoundError):
 
 class InvalidHalaqahError(ConflictError):
     def __init__(self, message: str = "الحلقة المحددة غير موجودة") -> None:
+        super().__init__(message)
+
+
+class InvalidScoringPresetError(ConflictError):
+    def __init__(self, message: str = "نظام تسعير النقاط المحدد غير موجود") -> None:
         super().__init__(message)

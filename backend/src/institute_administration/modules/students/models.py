@@ -13,7 +13,7 @@ from institute_administration.infrastructure.database.mixins import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
-from institute_administration.modules.students.domain import OrphanStatus
+from institute_administration.modules.students.domain import OrphanStatus, StudentType
 
 
 class StudentModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -39,6 +39,27 @@ class StudentModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     halaqah_id: Mapped[UUID | None] = mapped_column(
         Uuid,
         ForeignKey("halaqahs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Nullable rather than defaulted to «قرآن»: every student predating this column
+    # genuinely has no track on record, and NULL says so honestly instead of asserting
+    # a value nobody chose. Readers treat NULL as قرآن.
+    student_type: Mapped[StudentType | None] = mapped_column(
+        Enum(
+            StudentType,
+            name="student_type",
+            native_enum=True,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=True,
+    )
+    # Which named preset prices this student's reward card. NULL = the institute-wide
+    # `scoring_settings` row. SET NULL on delete so removing a preset quietly returns
+    # its students to the default instead of blocking the delete.
+    scoring_preset_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("scoring_presets.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

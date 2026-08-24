@@ -21,12 +21,16 @@
 		QURAN_PARTS,
 		RATING_OPTIONS,
 		computeScores,
+		parseRashidiRevisions,
 		parseRevisions,
 		ratingLabel,
+		serializeRashidiRevisions,
 		serializeRevisions,
+		type RashidiRevisionRow,
 		type RevisionRow
 	} from '$lib/labels';
 	import {
+		cn,
 		formatDateArabic,
 		formatDateShort,
 		nextSessionDate,
@@ -41,7 +45,41 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import Loader from '$lib/components/Loader.svelte';
 	import SummonSheet from '$lib/components/SummonSheet.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import Dropdown from '$lib/components/Dropdown.svelte';
 	import { upcomingExamsApi, type UpcomingExam } from '$lib/api';
+	import {
+		ayahsInJuz,
+		juzsForSurah,
+		pageForAyah,
+		pagesForJuz,
+		pagesForSurah,
+		pageRef,
+		pageFullLabel,
+		SURAHS,
+		surahsForJuz
+	} from '$lib/quran';
+	import {
+		RASHIDI_FIRST_PAGE,
+		RASHIDI_LAST_PAGE,
+		RASHIDI_LINES_PER_PAGE,
+		RASHIDI_STAGES,
+		rashidiFullLabel,
+		rashidiPagesForStage,
+		rashidiStageForPage
+	} from '$lib/rashidi';
+
+	/** Every mushaf page / juz / surah, for the dropdowns. */
+	const PAGES = Array.from({ length: 604 }, (_, i) => i + 1);
+	const JUZ_NUMBERS = Array.from({ length: 30 }, (_, i) => i + 1);
+	const SURAH_OPTIONS = SURAHS.map((s) => ({ value: s.number, label: s.name }));
+	const QURAN_PART_OPTIONS = QURAN_PARTS.map((p) => ({ value: p, label: `الجزء ${p}` }));
+	const toOptions = (values: number[]) => values.map((v) => ({ value: v, label: String(v) }));
+	/** `form.exam_from`/`exam_to` are strings, so their dropdown options must be too —
+	 *  otherwise picking one would assign a number into a field the rest of the form
+	 *  (`.trim()`, `wholeOrNull`) treats as a string. */
+	const toPageOptions = (values: number[]) =>
+		values.map((v) => ({ value: String(v), label: String(v) }));
 
 	const halaqahId = $derived($page.params.halaqahId ?? '');
 	const studentId = $derived($page.params.studentId ?? '');
@@ -54,6 +92,8 @@
 	let settings = $state<ScoringSettings | null>(null);
 	let record = $state<DailyRecord | null>(null);
 	let allProblems = $state<Problem[]>([]);
+	/** رشيدي: صفحة/مرحلة/سطر بدل جزء/سورة/آية/صفحة (انظر بطاقة التسميع أدناه). */
+	const isRashidi = $derived(student?.student_type === 'rashidi');
 	// The student's most recent exam and the homework they were told to prepare.
 	let prevRecitation = $state<DailyRecord | null>(null);
 	let requiredHomework = $state<string | null>(null);
@@ -65,30 +105,20 @@
 	// «استدعاء ولي الأمر»
 	let summonOpen = $state(false);
 
-	// «الاختبار القادم» — the exam this student is working towards.
+	// حذف سجل اليوم (الحضور والتسميع معاً)
+	let deleteOpen = $state(false);
+	let deleting = $state(false);
+
+	// «الاختبار القادم» — the exam this student is working towards. Folded below the
+	// difficulties section unless one is already scheduled.
 	let nextExam = $state<UpcomingExam | null>(null);
+	let examSectionOpen = $state(false);
 	let examOpen = $state(false);
 	let examSaving = $state(false);
 	let examForm = $state({ scheduled_date: '', part: '', exam_from: '', exam_to: '', notes: '' });
 
 	/** The halaqah's next scheduled session after the day being recorded. */
 	const nextSession = $derived(nextSessionDate(halaqah?.schedule, date));
-
-	/** Short Arabic summary of what was recited (exam range and/or revision). */
-	function reciteSummary(r: DailyRecord): string {
-		const bits: string[] = [];
-		if (r.exam_from != null && r.exam_to != null) {
-			bits.push(`من ${r.exam_from} إلى ${r.exam_to}`);
-		} else if (r.exam_to != null) {
-			bits.push(`إلى ${r.exam_to}`);
-		} else if (r.exam_from != null) {
-			bits.push(`من ${r.exam_from}`);
-		} else if (r.exam_total != null) {
-			bits.push(`${r.exam_total} صفحة`);
-		}
-		if (r.revision_lesson) bits.push('مراجعة');
-		return bits.join(' · ') || '—';
-	}
 
 	let form = $state({
 		exam_from: '',
@@ -97,13 +127,395 @@
 		rating: null as number | null,
 		revision_rating: null as number | null,
 		homework: '',
-		attitude: null as number | null,
+		// Default a new record to «متوسط» rather than leaving الأدب unset.
+		attitude: 2 as number | null,
 		added_points: 0 as number | null,
 		notes: '',
 		problems: '',
 		problem_ids: [] as string[]
 	});
 	let revisions = $state<RevisionRow[]>([]);
+	/** رشيدي: مراحل (١-٦) بدل أجزاء، بلا نصف — انظر بطاقة المراجعة أدناه. */
+	let rashidiRevisions = $state<RashidiRevisionRow[]>([]);
+
+	// ===== Smart التسميع pickers: سورة/جزء/آية/صفحة kept in sync both ways =====
+	type Side = 'from' | 'to' | 'hw';
+	let fromSurah = $state<number | ''>('');
+	let fromJuz = $state<number | ''>('');
+	let fromAyah = $state<number | ''>('');
+	let toSurah = $state<number | ''>('');
+	let toJuz = $state<number | ''>('');
+	let toAyah = $state<number | ''>('');
+	// «وظيفة» — the next assignment, picked the same way as من/إلى (not free text).
+	let hwSurah = $state<number | ''>('');
+	let hwJuz = $state<number | ''>('');
+	let hwAyah = $state<number | ''>('');
+	let hwPage = $state('');
+
+	// ===== رشيدي pickers: صفحة/مرحلة/سطر بدل جزء/سورة/آية/صفحة =====
+	const RASHIDI_STAGE_OPTIONS = RASHIDI_STAGES.map((s) => ({ value: s.number, label: s.name }));
+	const RASHIDI_LINE_OPTIONS = toOptions(
+		Array.from({ length: RASHIDI_LINES_PER_PAGE }, (_, i) => i + 1)
+	);
+	/** Page choices for a رشيدي side: the whole primer (5..48), or just the picked stage's pages. */
+	function rashidiPageOptions(stage: number | ''): number[] {
+		if (stage === '') {
+			return Array.from(
+				{ length: RASHIDI_LAST_PAGE - RASHIDI_FIRST_PAGE + 1 },
+				(_, i) => RASHIDI_FIRST_PAGE + i
+			);
+		}
+		const s = RASHIDI_STAGES.find((x) => x.number === stage);
+		return s ? rashidiPagesForStage(s) : [];
+	}
+	let fromStage = $state<number | ''>('');
+	let fromLine = $state<number | ''>('');
+	let toStage = $state<number | ''>('');
+	let toLine = $state<number | ''>('');
+	let hwStage = $state<number | ''>('');
+	let hwLine = $state<number | ''>('');
+
+	/** Surah choices for a side: 1..114, or just the surahs the picked juz touches. */
+	function surahOptions(juz: number | ''): { value: number; label: string }[] {
+		if (juz === '') return SURAH_OPTIONS;
+		return surahsForJuz(juz).map((s) => ({ value: s.number, label: s.name }));
+	}
+
+	/** Ayah choices for a side: 1..ayahCount for the picked surah, narrowed further to
+	 *  just the picked juz's slice of it when one is also set. */
+	function ayahOptions(surahNumber: number | '', juz: number | ''): number[] {
+		if (surahNumber === '') return [];
+		const s = SURAHS[surahNumber - 1];
+		if (!s) return [];
+		if (juz === '') return Array.from({ length: s.ayahCount }, (_, i) => i + 1);
+		const inJuz = ayahsInJuz(s, juz);
+		return inJuz.length ? inJuz : Array.from({ length: s.ayahCount }, (_, i) => i + 1);
+	}
+
+	/** Page choices for a side: narrowed by whichever of surah/juz is already picked
+	 *  (intersected if both are), or the whole mushaf if neither is. */
+	function pageOptions(surahNumber: number | '', juz: number | ''): number[] {
+		let opts = PAGES;
+		if (surahNumber !== '') {
+			const s = SURAHS[surahNumber - 1];
+			if (s) opts = pagesForSurah(s);
+		}
+		if (juz !== '') {
+			const juzPages = new Set(pagesForJuz(juz));
+			const narrowed = opts.filter((p) => juzPages.has(p));
+			if (narrowed.length) opts = narrowed;
+		}
+		return opts;
+	}
+
+	/** Juz choices for a side: 1..30, or just the juz range the picked surah spans. */
+	function juzOptions(surahNumber: number | ''): number[] {
+		if (surahNumber === '') return JUZ_NUMBERS;
+		const s = SURAHS[surahNumber - 1];
+		return s ? juzsForSurah(s) : JUZ_NUMBERS;
+	}
+
+	/** A new surah defaults to its first ayah (page/juz follow), so picking a surah alone
+	 *  is already a complete, usable selection — not just a filter waiting on an ayah. */
+	function onSurahPicked(side: Side): void {
+		const value = side === 'from' ? fromSurah : side === 'to' ? toSurah : hwSurah;
+		if (side === 'from') fromAyah = value === '' ? '' : 1;
+		else if (side === 'to') toAyah = value === '' ? '' : 1;
+		else hwAyah = value === '' ? '' : 1;
+		if (value === '') {
+			if (side === 'from') {
+				fromJuz = '';
+				form.exam_from = '';
+			} else if (side === 'to') {
+				toJuz = '';
+				form.exam_to = '';
+			} else {
+				hwJuz = '';
+				hwPage = '';
+				form.homework = '';
+			}
+		} else {
+			syncPageFromAyah(side);
+		}
+	}
+
+	/** True once the teacher edits المجموع by hand, which freezes the auto-computation.
+	 *  Recitation is often half or a quarter of a page, so the inclusive page count
+	 *  derived from «من»/«إلى» is a starting point, not the answer. */
+	let totalTouched = $state(false);
+
+	/** المجموع as implied by the range: an inclusive page count, or '' when incomplete. */
+	function autoTotal(): string {
+		const from = Number(form.exam_from);
+		const to = Number(form.exam_to);
+		if (
+			form.exam_from &&
+			form.exam_to &&
+			Number.isFinite(from) &&
+			Number.isFinite(to) &&
+			to >= from
+		) {
+			return String(to - from + 1);
+		}
+		return '';
+	}
+
+	/** Refresh المجموع from the range — unless the teacher has overridden it. */
+	function recomputeTotal(): void {
+		if (totalTouched) return;
+		form.exam_total = autoTotal();
+	}
+
+	/** Nudge المجموع by half a page, clamped at zero. Starts from the auto value so the
+	 *  first tap on «−» after picking a single page lands on «0.5» — نصف صفحة. */
+	function stepTotal(delta: number): void {
+		const base = Number(form.exam_total || autoTotal() || 0);
+		const next = Math.max(0, Math.round((base + delta) * 100) / 100);
+		form.exam_total = next === 0 ? '' : String(next);
+		totalTouched = true;
+	}
+
+	/** Hand المجموع back to the automatic count. */
+	function resetTotalToAuto(): void {
+		totalTouched = false;
+		form.exam_total = autoTotal();
+	}
+
+	/** جزء/صفحة/آية (أو مرحلة/صفحة/سطر لطلاب رشيدي) لصفحة معيّنة، أو «—» إن لم توجد. */
+	function examPageLabel(page: number | null | undefined, line?: number | null): string {
+		if (page == null) return '—';
+		if (isRashidi) return rashidiFullLabel(page, line ?? null) ?? `صفحة ${page}`;
+		return pageFullLabel(page) ?? `صفحة ${page}`;
+	}
+
+	/** «إلى» defaults to the same page as «من» — a single page is the default recitation
+	 *  length; the teacher stretches the range manually when it's more than that. */
+	function autoFillTo(fromPage: number): void {
+		const ref = pageRef(fromPage);
+		if (!ref) return;
+		form.exam_to = String(ref.page);
+		toSurah = ref.surah.number;
+		toAyah = ref.ayah;
+		toJuz = ref.juz;
+		recomputeTotal();
+		autoFillHomework(ref.page);
+	}
+
+	/** «وظيفة» defaults to one page past «إلى» — the natural next assignment — until the
+	 *  teacher picks a different one directly from its own جزء/سورة/آية/صفحة row. */
+	function autoFillHomework(toPage: number): void {
+		const ref = pageRef(toPage + 1);
+		if (!ref) {
+			hwSurah = '';
+			hwJuz = '';
+			hwAyah = '';
+			hwPage = '';
+			form.homework = '';
+			return;
+		}
+		hwPage = String(ref.page);
+		hwSurah = ref.surah.number;
+		hwAyah = ref.ayah;
+		hwJuz = ref.juz;
+		form.homework = pageFullLabel(ref.page) ?? `صفحة ${ref.page}`;
+	}
+
+	/** Resolve the page + juz from a picked surah/ayah pair (من/إلى/وظيفة). */
+	function syncPageFromAyah(side: Side): void {
+		const surah = side === 'from' ? fromSurah : side === 'to' ? toSurah : hwSurah;
+		const ayah = side === 'from' ? fromAyah : side === 'to' ? toAyah : hwAyah;
+		if (surah === '' || ayah === '') return;
+		const res = pageForAyah(surah, ayah);
+		if (!res) return;
+		if (side === 'from') {
+			form.exam_from = String(res.page);
+			fromJuz = res.juz;
+			autoFillTo(res.page);
+		} else if (side === 'to') {
+			form.exam_to = String(res.page);
+			toJuz = res.juz;
+			recomputeTotal();
+			autoFillHomework(res.page);
+		} else {
+			hwPage = String(res.page);
+			hwJuz = res.juz;
+			form.homework = pageFullLabel(res.page) ?? `صفحة ${res.page}`;
+		}
+	}
+
+	/** Resolve surah/ayah/juz from a directly-picked page (من/إلى/وظيفة). */
+	function syncAyahFromPage(side: Side): void {
+		const raw = side === 'from' ? form.exam_from : side === 'to' ? form.exam_to : hwPage;
+		const ref = raw.trim() ? pageRef(Number(raw)) : null;
+		if (side === 'from') {
+			fromSurah = ref?.surah.number ?? '';
+			fromAyah = ref?.ayah ?? '';
+			fromJuz = ref?.juz ?? '';
+			if (ref) autoFillTo(ref.page);
+		} else if (side === 'to') {
+			toSurah = ref?.surah.number ?? '';
+			toAyah = ref?.ayah ?? '';
+			toJuz = ref?.juz ?? '';
+			recomputeTotal();
+			if (ref) autoFillHomework(ref.page);
+		} else {
+			hwSurah = ref?.surah.number ?? '';
+			hwAyah = ref?.ayah ?? '';
+			hwJuz = ref?.juz ?? '';
+			form.homework = ref ? (pageFullLabel(ref.page) ?? `صفحة ${ref.page}`) : '';
+		}
+	}
+
+	/** Picking a juz alone (no surah yet) is still a complete-enough selection to fill the
+	 *  rest of the row: keep the current surah if it still fits the new juz, otherwise fall
+	 *  back to the juz's first surah, then default to that surah's first ayah within the
+	 *  juz (via `syncPageFromAyah`, which also fills the page and cascades إلى/الوظيفة). */
+	function syncFromJuz(side: Side): void {
+		const juz = side === 'from' ? fromJuz : side === 'to' ? toJuz : hwJuz;
+		if (juz === '') return;
+		const surahNumber = side === 'from' ? fromSurah : side === 'to' ? toSurah : hwSurah;
+		const currentSurah = surahNumber === '' ? null : SURAHS[surahNumber - 1];
+		const surahStillValid = !!currentSurah && juzsForSurah(currentSurah).includes(juz);
+		const surah = surahStillValid ? currentSurah : (surahsForJuz(juz)[0] ?? null);
+		const ayah = surah ? (ayahsInJuz(surah, juz)[0] ?? 1) : '';
+		if (side === 'from') {
+			fromSurah = surah ? surah.number : '';
+			fromAyah = ayah;
+		} else if (side === 'to') {
+			toSurah = surah ? surah.number : '';
+			toAyah = ayah;
+		} else {
+			hwSurah = surah ? surah.number : '';
+			hwAyah = ayah;
+		}
+		if (surah) {
+			syncPageFromAyah(side);
+		} else if (side === 'from') {
+			form.exam_from = '';
+			recomputeTotal();
+		} else if (side === 'to') {
+			form.exam_to = '';
+			recomputeTotal();
+		} else {
+			hwPage = '';
+			form.homework = '';
+		}
+	}
+
+	/** «إلى» defaults to the same صفحة (ونفس السطر) as «من» — same «صفحة واحدة» default
+	 *  philosophy as the قرآن model, just with رشيدي's مرحلة/صفحة/سطر shape. */
+	function autoFillToRashidi(fromPage: number): void {
+		const stage = rashidiStageForPage(fromPage);
+		if (!stage) return;
+		form.exam_to = String(fromPage);
+		toStage = stage.number;
+		toLine = fromLine === '' ? 1 : fromLine;
+		recomputeTotal();
+		autoFillHomeworkRashidi(fromPage);
+	}
+
+	/** «وظيفة» defaults to one صفحة past «إلى»، سطر 1. */
+	function autoFillHomeworkRashidi(toPage: number): void {
+		const stage = rashidiStageForPage(toPage + 1);
+		if (!stage) {
+			hwStage = '';
+			hwPage = '';
+			hwLine = '';
+			form.homework = '';
+			return;
+		}
+		hwPage = String(toPage + 1);
+		hwStage = stage.number;
+		hwLine = 1;
+		form.homework = rashidiFullLabel(toPage + 1, 1) ?? `صفحة ${toPage + 1}`;
+	}
+
+	/** Resolve the مرحلة from a directly-picked صفحة (من/إلى/وظيفة). */
+	function syncStageFromPageRashidi(side: Side): void {
+		const raw = side === 'from' ? form.exam_from : side === 'to' ? form.exam_to : hwPage;
+		const page = raw.trim() ? Number(raw) : null;
+		const stage = page != null ? rashidiStageForPage(page) : null;
+		if (side === 'from') {
+			fromStage = stage?.number ?? '';
+			if (page != null && stage) autoFillToRashidi(page);
+		} else if (side === 'to') {
+			toStage = stage?.number ?? '';
+			recomputeTotal();
+			if (page != null && stage) autoFillHomeworkRashidi(page);
+		} else {
+			hwStage = stage?.number ?? '';
+			form.homework = page != null && stage ? (rashidiFullLabel(page, hwLine || null) ?? '') : '';
+		}
+	}
+
+	/** A مرحلة is a broad filter, not a specific point — narrows الصفحة's options and,
+	 *  once picked alone, defaults to that stage's first صفحة (mirrors الجزء's behaviour). */
+	function syncPageFromStageRashidi(side: Side): void {
+		const stageNumber = side === 'from' ? fromStage : side === 'to' ? toStage : hwStage;
+		if (stageNumber === '') return;
+		const stage = RASHIDI_STAGES.find((s) => s.number === stageNumber);
+		if (!stage) return;
+		const page = stage.firstPage;
+		if (side === 'from') {
+			form.exam_from = String(page);
+			fromLine = 1;
+			autoFillToRashidi(page);
+		} else if (side === 'to') {
+			form.exam_to = String(page);
+			toLine = 1;
+			recomputeTotal();
+			autoFillHomeworkRashidi(page);
+		} else {
+			hwPage = String(page);
+			hwLine = 1;
+			form.homework = rashidiFullLabel(page, 1) ?? '';
+		}
+	}
+
+	/** Restore fromStage/toStage from an already-saved صفحة when opening an existing
+	 *  record — unlike `syncStageFromPageRashidi`, never cascades to autoFill «إلى»/
+	 *  «وظيفة», since both sides already hold their own true saved values at load time. */
+	function deriveRashidiStage(side: 'from' | 'to', page: string): void {
+		const stage = page.trim() ? rashidiStageForPage(Number(page)) : null;
+		if (side === 'from') fromStage = stage?.number ?? '';
+		else toStage = stage?.number ?? '';
+	}
+
+	/** Clear the whole التسميع card — من/إلى/وظيفة pickers, المجموع, and التقدير. */
+	function resetTasmee(): void {
+		fromSurah = '';
+		fromJuz = '';
+		fromAyah = '';
+		hwSurah = '';
+		hwJuz = '';
+		hwAyah = '';
+		hwPage = '';
+		form.homework = '';
+		toSurah = '';
+		toJuz = '';
+		toAyah = '';
+		fromStage = '';
+		fromLine = '';
+		toStage = '';
+		toLine = '';
+		hwStage = '';
+		hwLine = '';
+		form.exam_from = '';
+		form.exam_to = '';
+		form.exam_total = '';
+		totalTouched = false;
+		form.rating = null;
+	}
+
+	/** «من» = the last page the student reached last time (their previous recitation's
+	 *  «إلى», or «من» if that's all that was recorded) — «إلى» follows automatically. */
+	function fillLastPosition(): void {
+		const page = prevRecitation?.exam_to ?? prevRecitation?.exam_from;
+		if (page == null) return;
+		form.exam_from = String(page);
+		if (isRashidi) syncStageFromPageRashidi('from');
+		else syncAyahFromPage('from');
+	}
 
 	let saving = $state(false);
 	let feedback = $state<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -134,10 +546,8 @@
 		)
 	);
 
-	/** How many of the collapsed extras carry a value (shown on the toggle). */
-	const extrasCount = $derived(
-		(form.notes.trim() ? 1 : 0) + (form.problems.trim() ? 1 : 0) + form.problem_ids.length
-	);
+	/** How many difficulty tags are picked (shown on the collapsible's toggle). */
+	const extrasCount = $derived(form.problem_ids.length);
 
 	onMount(load);
 
@@ -145,11 +555,12 @@
 		if (!auth.teacher) return;
 		status = 'loading';
 		try {
-			const [s, h, rec, scoring, probs, latest] = await Promise.all([
+			const [s, h, rec, scoring, presets, probs, latest] = await Promise.all([
 				repo.getStudent(studentId),
 				repo.getHalaqah(halaqahId),
 				repo.getDayRecord(studentId, date),
 				repo.getScoring(),
+				repo.listScoringPresets(),
 				repo.listProblems(),
 				// No date window: a student's last recitation must show even after a
 				// long absence (the old three-month lookback hid it).
@@ -157,7 +568,10 @@
 			]);
 			student = s;
 			halaqah = h;
-			settings = scoring;
+			// This student's assigned pricing preset (see halaqah settings), or the
+			// halaqah's single default — matches how the mock server prices the same record.
+			settings =
+				(s.scoring_preset_id && presets.find((p) => p.id === s.scoring_preset_id)) || scoring;
 			allProblems = probs;
 			record = rec;
 
@@ -180,8 +594,24 @@
 					problems: record.problems ?? '',
 					problem_ids: record.tagged_problems.map((p) => p.id)
 				};
-				revisions = parseRevisions(record.revision_lesson);
-				extrasOpen = !!(record.notes || record.problems || record.tagged_problems.length);
+				if (s.student_type === 'rashidi') {
+					rashidiRevisions = parseRashidiRevisions(record.revision_lesson);
+				} else {
+					revisions = parseRevisions(record.revision_lesson);
+				}
+				extrasOpen = record.tagged_problems.length > 0;
+				fromLine = record.exam_from_line ?? '';
+				toLine = record.exam_to_line ?? '';
+				// A saved total that doesn't match the range was typed by hand (a half page,
+				// most often) — keep it frozen so re-opening the record doesn't round it up.
+				totalTouched = form.exam_total !== '' && form.exam_total !== autoTotal();
+				if (s.student_type === 'rashidi') {
+					deriveRashidiStage('from', form.exam_from);
+					deriveRashidiStage('to', form.exam_to);
+				} else {
+					syncAyahFromPage('from');
+					syncAyahFromPage('to');
+				}
 			}
 			status = 'ready';
 		} catch (e) {
@@ -196,6 +626,7 @@
 		try {
 			const res = await upcomingExamsApi.next([studentId]);
 			nextExam = res.items[0]?.exam ?? null;
+			if (nextExam) examSectionOpen = true;
 		} catch {
 			/* offline or unavailable — the section simply stays hidden */
 		}
@@ -209,6 +640,7 @@
 			exam_to: nextExam?.exam_to?.toString() ?? '',
 			notes: nextExam?.notes ?? ''
 		};
+		examSectionOpen = true;
 		examOpen = true;
 	}
 
@@ -313,23 +745,19 @@
 		if (cleaned !== el.value) el.value = cleaned;
 	}
 
-	/** The page *count* may be fractional; accept the Arabic decimal mark too. */
-	function amountInput(event: Event) {
-		const el = event.currentTarget as HTMLInputElement;
-		const cleaned = el.value
-			.replace('٫', '.')
-			.replace(',', '.')
-			.replace(/[^\d.]/g, '')
-			.replace(/(\..*)\./g, '$1'); // at most one decimal point
-		if (cleaned !== el.value) el.value = cleaned;
-	}
-
 	function addRevision() {
 		// Default the review to the whole juzʼ (كله).
 		revisions = [...revisions, { part: 1, half: 0, success: true }];
 	}
 	function removeRevision(i: number) {
 		revisions = revisions.filter((_, idx) => idx !== i);
+	}
+
+	function addRashidiRevision() {
+		rashidiRevisions = [...rashidiRevisions, { stage: 1, success: true }];
+	}
+	function removeRashidiRevision(i: number) {
+		rashidiRevisions = rashidiRevisions.filter((_, idx) => idx !== i);
 	}
 
 	function toggleProblem(id: string) {
@@ -359,9 +787,13 @@
 		const fields = {
 			exam_from: wholeOrNull(form.exam_from) ?? null,
 			exam_to: wholeOrNull(form.exam_to) ?? null,
+			exam_from_line: fromLine === '' ? null : fromLine,
+			exam_to_line: toLine === '' ? null : toLine,
 			exam_total: amountOrNull(form.exam_total) ?? null,
 			rating: (form.rating as Rating | null) ?? null,
-			revision_lesson: serializeRevisions(revisions),
+			revision_lesson: isRashidi
+				? serializeRashidiRevisions(rashidiRevisions)
+				: serializeRevisions(revisions),
 			revision_rating: (form.revision_rating as Rating | null) ?? null,
 			homework: orNull(form.homework),
 			attitude: (form.attitude as Attitude | null) ?? null,
@@ -386,11 +818,27 @@
 			saving = false;
 		}
 	}
+
+	async function deleteTodayRecord() {
+		if (deleting || !record) return;
+		deleting = true;
+		try {
+			await repo.deleteRecord(record.id);
+			flash('ok', net.online ? 'تم حذف السجل' : 'حُذف محلياً — سيُحذف من الخادم عند الاتصال');
+			setTimeout(() => goto(`/halaqat/${halaqahId}?tab=recitation&date=${date}`), 600);
+		} catch (e) {
+			console.error('delete daily record failed', e);
+			flash('err', errorMessage(e, 'تعذّر حذف السجل'));
+			deleting = false;
+		}
+	}
 </script>
 
 <TopBar
 	title={student?.full_name ?? 'الطالب'}
-	subtitle="التسميع والمراجعة — {formatDateArabic(date)}"
+	subtitle="اليوم {formatDateArabic(date)}{nextSession
+		? ` · القادم ${formatDateArabic(nextSession)}`
+		: ''}"
 	backHref={`/halaqat/${halaqahId}`}
 />
 
@@ -400,192 +848,338 @@
 	{:else if status === 'error'}
 		<EmptyState icon="error" title="حدث خطأ" hint={error} />
 	{:else}
-		<!-- ===== Context strip: points + what was required today + next session ===== -->
-		<section class="rounded-3xl border border-outline-variant/15 bg-primary/5 p-3.5 shadow-card">
-			<div class="flex items-center justify-between gap-2">
-				<div class="flex min-w-0 items-center gap-1.5">
-					<Icon name="history" class="text-base text-primary" />
-					<span class="text-[13px] font-bold text-on-surface-variant">المطلوب اليوم</span>
-				</div>
-				<div class="flex shrink-0 items-baseline gap-1 text-primary">
-					<span class="font-jakarta text-2xl font-bold leading-none">{scores.total}</span>
-					<span class="text-[11px] font-medium">نقطة</span>
-				</div>
+		<!-- ===== Brief last-session summary: light, concise — recitation / revision / homework ===== -->
+		<section class="rounded-3xl bg-surface-container-low/70 px-3.5 py-3">
+			<div class="flex items-center gap-1.5 text-on-surface-variant/60">
+				<Icon name="history" class="text-sm" />
+				<span class="text-[11px] font-bold">آخر جلسة</span>
+				{#if prevRecitation}
+					<span class="text-[10px] text-on-surface-variant/45">
+						{formatDateShort(prevRecitation.record_date)}{prevRecitation.rating != null
+							? ` · ${ratingLabel(prevRecitation.rating)}`
+							: ''}
+					</span>
+				{/if}
 			</div>
-
-			<div class="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-2">
+			<div class="mt-2 grid grid-cols-2 gap-2 text-[11px]">
 				<div class="min-w-0">
-					<p class="text-[10px] font-medium text-on-surface-variant/50">آخر تسميع</p>
-					{#if prevRecitation}
-						<p class="truncate text-[13px] font-bold text-on-surface">
-							{reciteSummary(prevRecitation)}
+					<p class="text-on-surface-variant/45">التسميع</p>
+					{#if prevRecitation?.exam_from != null || prevRecitation?.exam_to != null || requiredHomework}
+						<p class="truncate font-bold text-on-surface-variant/80">
+							من {toLatinDigits(
+								examPageLabel(prevRecitation?.exam_from, prevRecitation?.exam_from_line)
+							)}
 						</p>
-						<p class="text-[10px] text-on-surface-variant/60">
-							{formatDateShort(prevRecitation.record_date)}{prevRecitation.rating != null
-								? ` · ${ratingLabel(prevRecitation.rating)}`
-								: ''}
+						<p class="truncate font-bold text-on-surface-variant/80">
+							إلى {toLatinDigits(
+								examPageLabel(prevRecitation?.exam_to, prevRecitation?.exam_to_line)
+							)}
+						</p>
+						<p class="truncate font-bold text-on-surface-variant/80">
+							وظيفة {toLatinDigits(requiredHomework) || '—'}
 						</p>
 					{:else}
-						<p class="text-[13px] font-bold text-on-surface-variant/40">لا يوجد</p>
+						<p class="truncate font-bold text-on-surface-variant/80">لا يوجد</p>
 					{/if}
 				</div>
 				<div class="min-w-0">
-					<p class="text-[10px] font-medium text-on-surface-variant/50">الوظيفة المطلوبة</p>
-					<p class="truncate text-[13px] font-bold text-on-surface">
-						{toLatinDigits(requiredHomework) || 'لا يوجد واجب'}
+					<p class="text-on-surface-variant/45">المراجعة</p>
+					<p class="truncate font-bold text-on-surface-variant/80">
+						{toLatinDigits(prevRecitation?.revision_lesson) || 'لا يوجد'}
 					</p>
 				</div>
 			</div>
-
-			{#if nextSession}
-				<div
-					class="mt-2.5 flex items-center gap-1.5 border-t border-outline-variant/15 pt-2 text-[11px]"
-				>
-					<Icon name="event_upcoming" class="text-[15px] text-primary" />
-					<span class="text-on-surface-variant/60">التسميع القادم</span>
-					<span class="font-bold text-on-surface">{formatDateArabic(nextSession)}</span>
-				</div>
-			{/if}
 		</section>
 
-		<!-- ===== الاختبار القادم ===== -->
-		<section
-			class="rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-3.5 shadow-card"
+		<!-- ===== Detailed points strip: each source of points, total fixed at the line's end ===== -->
+		<div
+			class="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1 px-1 text-[10px] leading-none text-on-surface-variant/60"
 		>
-			<div class="flex items-center justify-between gap-2">
-				<div class="flex min-w-0 items-center gap-1.5">
-					<Icon name="event_upcoming" class="text-base text-primary" />
-					<span class="text-[13px] font-bold text-on-surface-variant">الاختبار القادم</span>
-				</div>
-				<button
-					type="button"
-					onclick={openExamForm}
-					class="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary active:scale-95"
-				>
-					<Icon name={nextExam ? 'edit_note' : 'add'} class="text-sm" />
-					{nextExam ? 'تعديل' : 'تحديد'}
-				</button>
-			</div>
-
-			{#if nextExam}
-				<div class="mt-2 flex items-baseline justify-between gap-2">
-					<span class="truncate text-[13px] font-bold text-on-surface">{nextExam.summary}</span>
-					<span class="shrink-0 text-[11px] text-on-surface-variant/70">
-						{formatDateArabic(nextExam.scheduled_date)}
+			<div class="flex flex-wrap items-center gap-x-1 gap-y-1">
+				<span>حضور {scores.present}</span>
+				<span class="text-on-surface-variant/25">·</span>
+				<span>تسميع {scores.exam}</span>
+				<span class="text-on-surface-variant/25">·</span>
+				<span>مراجعة {scores.revision}</span>
+				<span class="text-on-surface-variant/25">·</span>
+				<span>أدب {scores.attitude}</span>
+				{#if (form.added_points ?? 0) !== 0}
+					<span class="text-on-surface-variant/25">·</span>
+					<span class={(form.added_points ?? 0) > 0 ? 'text-emerald-700' : 'text-error'}>
+						إضافي {(form.added_points ?? 0) > 0 ? '+' : ''}{form.added_points}
 					</span>
-				</div>
-				{#if nextExam.notes}
-					<p class="mt-1 truncate text-[11px] text-on-surface-variant/60">{nextExam.notes}</p>
 				{/if}
-			{:else}
-				<p class="mt-2 text-[12px] text-on-surface-variant/50">لم يُحدَّد اختبار قادم.</p>
-			{/if}
-
-			{#if examOpen}
-				<div class="mt-3 space-y-2.5 border-t border-outline-variant/15 pt-3">
-					<div class="space-y-1">
-						<span class="pr-1 text-[11px] font-bold text-on-surface-variant">تاريخ الاختبار</span>
-						<input
-							type="date"
-							bind:value={examForm.scheduled_date}
-							class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
-						/>
-					</div>
-					<div class="grid grid-cols-3 gap-2">
-						<input
-							bind:value={examForm.part}
-							inputmode="numeric"
-							oninput={digitsOnly}
-							placeholder="الجزء"
-							class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-						/>
-						<input
-							bind:value={examForm.exam_from}
-							inputmode="numeric"
-							placeholder="من"
-							class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-						/>
-						<input
-							bind:value={examForm.exam_to}
-							inputmode="numeric"
-							placeholder="إلى"
-							class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-						/>
-					</div>
-					<input
-						bind:value={examForm.notes}
-						placeholder="ملاحظات (اختياري)"
-						class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-					/>
-					<div class="flex gap-2">
-						<button
-							type="button"
-							onclick={() => (examOpen = false)}
-							class="flex-1 rounded-full bg-surface-container-high py-2.5 text-[12px] font-bold text-on-surface-variant active:scale-95"
-						>
-							إلغاء
-						</button>
-						{#if nextExam}
-							<button
-								type="button"
-								onclick={cancelExam}
-								class="rounded-full bg-error/10 px-4 py-2.5 text-[12px] font-bold text-error active:scale-95"
-							>
-								حذف
-							</button>
-						{/if}
-						<button
-							type="button"
-							onclick={saveExam}
-							disabled={examSaving}
-							class="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-brand py-2.5 text-[12px] font-bold text-white active:scale-95 disabled:opacity-70"
-						>
-							{#if examSaving}<Loader class="text-sm" />{/if} حفظ
-						</button>
-					</div>
-					<p class="text-[10px] text-on-surface-variant/50">
-						يتطلب تحديد الاختبار اتصالاً بالإنترنت.
-					</p>
-				</div>
-			{/if}
-		</section>
+			</div>
+			<span class="shrink-0 font-bold text-primary">{scores.total} نقطة</span>
+		</div>
 
 		<!-- ===== التسميع ===== -->
 		<section
 			class="space-y-3 rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-3.5 shadow-card"
 		>
-			<Field label="التسميع" icon="menu_book" hint="(من / إلى / المجموع — يقبل 0.5)">
-				<div class="grid grid-cols-3 gap-2">
-					<input
-						bind:value={form.exam_from}
-						inputmode="numeric"
-						oninput={digitsOnly}
-						placeholder="من"
-						class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-					/>
-					<input
-						bind:value={form.exam_to}
-						inputmode="numeric"
-						oninput={digitsOnly}
-						placeholder="إلى"
-						class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-					/>
-					<input
-						bind:value={form.exam_total}
-						inputmode="decimal"
-						oninput={amountInput}
-						placeholder="المجموع"
-						class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-					/>
+			<Field
+				label="التسميع"
+				icon="menu_book"
+				hint={isRashidi
+					? '(المرحلة تُضيّق الصفحة، والصفحة تحدّد المرحلة)'
+					: '(الجزء/السورة/الآية تملأ الصفحة، أو العكس)'}
+			>
+				{#snippet actions()}
+					<div class="flex items-center gap-1.5">
+						<button
+							type="button"
+							onclick={fillLastPosition}
+							disabled={prevRecitation?.exam_to == null && prevRecitation?.exam_from == null}
+							aria-label="تعبئة آخر موضع وصل إليه الطالب"
+							class="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary active:scale-90 disabled:opacity-40"
+						>
+							<Icon name="trending_up" class="text-base" />
+						</button>
+						<button
+							type="button"
+							onclick={resetTasmee}
+							aria-label="تصفير بطاقة التسميع"
+							class="flex h-7 w-7 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant active:scale-90"
+						>
+							<Icon name="cancel" class="text-base" />
+						</button>
+					</div>
+				{/snippet}
+				<div class="space-y-1 rounded-2xl bg-surface-container-low/60 px-2.5 pb-2 pt-1">
+					{#if isRashidi}
+						<!-- رشيدي: صفحة/مرحلة/سطر بدل جزء/سورة/آية/صفحة -->
+						<span class="pr-1 text-[10px] font-bold text-on-surface-variant/60">من</span>
+						<div class="grid grid-cols-3 gap-1">
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">ص</span>
+								<Dropdown
+									bind:value={form.exam_from}
+									options={toPageOptions(rashidiPageOptions(fromStage))}
+									onchange={() => syncStageFromPageRashidi('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">مرحلة</span>
+								<Dropdown
+									bind:value={fromStage}
+									options={RASHIDI_STAGE_OPTIONS}
+									onchange={() => syncPageFromStageRashidi('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">سطر</span>
+								<Dropdown
+									bind:value={fromLine}
+									options={RASHIDI_LINE_OPTIONS}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+						</div>
+
+						<span class="block pr-1 pt-0.5 text-[10px] font-bold text-on-surface-variant/60"
+							>إلى</span
+						>
+						<div class="grid grid-cols-3 gap-1">
+							<Dropdown
+								bind:value={form.exam_to}
+								options={toPageOptions(rashidiPageOptions(toStage))}
+								onchange={() => syncStageFromPageRashidi('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={toStage}
+								options={RASHIDI_STAGE_OPTIONS}
+								onchange={() => syncPageFromStageRashidi('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={toLine}
+								options={RASHIDI_LINE_OPTIONS}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+						</div>
+
+						<span class="block pr-1 pt-0.5 text-[10px] font-bold text-on-surface-variant/60"
+							>وظيفة</span
+						>
+						<div class="grid grid-cols-3 gap-1">
+							<Dropdown
+								bind:value={hwPage}
+								options={toPageOptions(rashidiPageOptions(hwStage))}
+								onchange={() => syncStageFromPageRashidi('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={hwStage}
+								options={RASHIDI_STAGE_OPTIONS}
+								onchange={() => syncPageFromStageRashidi('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={hwLine}
+								options={RASHIDI_LINE_OPTIONS}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+						</div>
+					{:else}
+						<!-- من: مع عناوين الأعمدة (الترتيب: صفحة، جزء، سورة، آية) -->
+						<span class="pr-1 text-[10px] font-bold text-on-surface-variant/60">من</span>
+						<div class="grid grid-cols-4 gap-1">
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">ص</span>
+								<Dropdown
+									bind:value={form.exam_from}
+									options={toPageOptions(pageOptions(fromSurah, fromJuz))}
+									onchange={() => syncAyahFromPage('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">ج</span>
+								<Dropdown
+									bind:value={fromJuz}
+									options={toOptions(juzOptions(fromSurah))}
+									onchange={() => syncFromJuz('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">س</span>
+								<Dropdown
+									bind:value={fromSurah}
+									options={surahOptions(fromJuz)}
+									onchange={() => onSurahPicked('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+							<div class="min-w-0 space-y-0.5">
+								<span class="block text-center text-[9px] text-on-surface-variant/45">آ</span>
+								<Dropdown
+									bind:value={fromAyah}
+									options={toOptions(ayahOptions(fromSurah, fromJuz))}
+									disabled={fromSurah === ''}
+									onchange={() => syncPageFromAyah('from')}
+									class="px-1.5 py-3 text-[11px]"
+								/>
+							</div>
+						</div>
+
+						<!-- إلى: بدون تكرار عناوين الأعمدة -->
+						<span class="block pr-1 pt-0.5 text-[10px] font-bold text-on-surface-variant/60"
+							>إلى</span
+						>
+						<div class="grid grid-cols-4 gap-1">
+							<Dropdown
+								bind:value={form.exam_to}
+								options={toPageOptions(pageOptions(toSurah, toJuz))}
+								onchange={() => syncAyahFromPage('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={toJuz}
+								options={toOptions(juzOptions(toSurah))}
+								onchange={() => syncFromJuz('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={toSurah}
+								options={surahOptions(toJuz)}
+								onchange={() => onSurahPicked('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={toAyah}
+								options={toOptions(ayahOptions(toSurah, toJuz))}
+								disabled={toSurah === ''}
+								onchange={() => syncPageFromAyah('to')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+						</div>
+
+						<!-- وظيفة: نفس تنسيق سطري من/إلى -->
+						<span class="block pr-1 pt-0.5 text-[10px] font-bold text-on-surface-variant/60"
+							>وظيفة</span
+						>
+						<div class="grid grid-cols-4 gap-1">
+							<Dropdown
+								bind:value={hwPage}
+								options={toPageOptions(pageOptions(hwSurah, hwJuz))}
+								onchange={() => syncAyahFromPage('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={hwJuz}
+								options={toOptions(juzOptions(hwSurah))}
+								onchange={() => syncFromJuz('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={hwSurah}
+								options={surahOptions(hwJuz)}
+								onchange={() => onSurahPicked('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
+								bind:value={hwAyah}
+								options={toOptions(ayahOptions(hwSurah, hwJuz))}
+								disabled={hwSurah === ''}
+								onchange={() => syncPageFromAyah('hw')}
+								class="px-1.5 py-3 text-[11px]"
+							/>
+						</div>
+					{/if}
+
+					<!-- المجموع: يُحسب تلقائياً من «من»/«إلى» ويبقى قابلاً للتعديل، لأن التسميع
+					     كثيراً ما يكون نصف صفحة أو ربعها ولا يطابق عدد الصفحات الكامل. -->
+					<div class="flex items-center gap-1.5 pr-1 pt-1">
+						<span class="shrink-0 text-[10px] font-bold text-on-surface-variant/60">المجموع</span>
+						<button
+							type="button"
+							onclick={() => stepTotal(-0.5)}
+							aria-label="إنقاص نصف صفحة"
+							class="grid size-7 shrink-0 place-items-center rounded-full border border-outline-variant/25 pb-0.5 font-jakarta text-[16px] font-bold leading-none text-on-surface-variant active:scale-95"
+							>−</button
+						>
+						<input
+							bind:value={form.exam_total}
+							oninput={() => (totalTouched = true)}
+							inputmode="decimal"
+							placeholder="—"
+							class="w-14 rounded-xl border border-outline-variant/25 bg-surface-container-lowest py-1.5 text-center font-jakarta text-[13px] font-bold text-on-surface"
+						/>
+						<button
+							type="button"
+							onclick={() => stepTotal(0.5)}
+							aria-label="زيادة نصف صفحة"
+							class="grid size-7 shrink-0 place-items-center rounded-full border border-outline-variant/25 pb-0.5 font-jakarta text-[16px] font-bold leading-none text-on-surface-variant active:scale-95"
+							>+</button
+						>
+						<span class="shrink-0 text-[10px] text-on-surface-variant/50">صفحة</span>
+						{#if totalTouched}
+							<button
+								type="button"
+								onclick={resetTotalToAuto}
+								class="mr-auto shrink-0 text-[10px] font-bold text-primary underline underline-offset-2"
+							>
+								تلقائي
+							</button>
+						{/if}
+					</div>
 				</div>
 			</Field>
 
-			<Field label="التقدير" icon="grade">
-				<PillGroup bind:value={form.rating} options={RATING_OPTIONS} />
-			</Field>
+			<div class="flex items-center gap-2">
+				<div class="flex shrink-0 items-center gap-1">
+					<Icon name="grade" class="text-base text-primary" />
+					<span class="text-[13px] font-bold text-on-surface-variant">التقدير</span>
+				</div>
+				<PillGroup bind:value={form.rating} options={RATING_OPTIONS} compact class="flex-1" />
+			</div>
 		</section>
 
-		<!-- ===== المراجعة — one compact line per revised part ===== -->
+		<!-- ===== المراجعة ===== -->
 		<section
 			class="space-y-3 rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-3.5 shadow-card"
 		>
@@ -593,99 +1187,168 @@
 				<div class="flex items-center gap-1.5">
 					<Icon name="history_edu" class="text-base text-primary" />
 					<span class="text-[13px] font-bold text-on-surface-variant">المراجعة</span>
-					{#if revisions.length > 0}
+					{#if (isRashidi ? rashidiRevisions : revisions).length > 0}
 						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary"
-							>{revisions.length}</span
+							>{(isRashidi ? rashidiRevisions : revisions).length}</span
 						>
 					{/if}
 				</div>
 				<button
-					onclick={addRevision}
+					onclick={isRashidi ? addRashidiRevision : addRevision}
 					class="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary active:scale-95"
 				>
 					<Icon name="add" class="text-sm" /> إضافة
 				</button>
 			</div>
 
-			{#if revisions.length === 0}
-				<p
-					class="rounded-xl bg-surface-container-low px-3 py-3 text-center text-[11px] text-on-surface-variant/60"
-				>
-					لا توجد مراجعات. اضغط «إضافة» لإضافة جزء.
-				</p>
-			{:else}
+			{#if isRashidi}
+				{#if rashidiRevisions.length > 0}
+					<div class="space-y-1.5">
+						{#each rashidiRevisions as rev, i (i)}
+							<!-- grid (not flex): المرحلة takes the remaining space, أخفق/نجح and the trash
+								     icon take only what their content needs — no النصف column لرشيدي. -->
+							<div class="grid items-center gap-1" style="grid-template-columns: 1fr auto auto;">
+								<Dropdown
+									bind:value={rev.stage}
+									options={RASHIDI_STAGE_OPTIONS}
+									class="min-w-0 px-1.5 py-3 text-[11px]"
+								/>
+								<div class="flex overflow-hidden rounded-full border border-outline-variant/30">
+									<button
+										type="button"
+										onclick={() => (rev.success = false)}
+										class={cn(
+											'px-2 py-3 text-[11px] font-bold transition active:scale-95',
+											!rev.success
+												? 'bg-error text-on-error'
+												: 'bg-surface-container-low text-on-surface-variant'
+										)}
+									>
+										أخفق
+									</button>
+									<button
+										type="button"
+										onclick={() => (rev.success = true)}
+										class={cn(
+											'px-2 py-3 text-[11px] font-bold transition active:scale-95',
+											rev.success
+												? 'bg-emerald-500 text-white'
+												: 'bg-surface-container-low text-on-surface-variant'
+										)}
+									>
+										نجح
+									</button>
+								</div>
+								<button
+									onclick={() => removeRashidiRevision(i)}
+									class="rounded-full p-1 text-error active:scale-90"
+									aria-label="حذف المراجعة"
+								>
+									<Icon name="delete" class="text-[15px]" />
+								</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{:else if revisions.length > 0}
 				<div class="space-y-1.5">
 					{#each revisions as rev, i (i)}
-						<div class="flex items-center gap-1.5">
-							<select
+						<!-- grid (not flex) so the four columns always sum to exactly the card's width,
+							     regardless of content length — الجزء and النصف share the fr space, أخفق/نجح
+							     and the trash icon take only what their content needs. -->
+						<div
+							class="grid items-center gap-1"
+							style="grid-template-columns: 1fr 1.15fr auto auto;"
+						>
+							<Dropdown
 								bind:value={rev.part}
-								aria-label="الجزء"
-								class="min-w-0 flex-1 rounded-xl border border-outline-variant/30 bg-surface-container-low px-2 py-2 text-[13px] text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
-							>
-								{#each QURAN_PARTS as p (p)}
-									<option value={p}>الجزء {p}</option>
-								{/each}
-							</select>
-							<select
+								options={QURAN_PART_OPTIONS}
+								class="min-w-0 px-1.5 py-3 text-[11px]"
+							/>
+							<Dropdown
 								bind:value={rev.half}
-								aria-label="النصف"
-								class="min-w-0 flex-1 rounded-xl border border-outline-variant/30 bg-surface-container-low px-2 py-2 text-[13px] text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
-							>
-								{#each HALF_OPTIONS as h (h.value)}
-									<option value={h.value}>{h.label}</option>
-								{/each}
-							</select>
-							<!-- one tap flips نجح ⇄ أخفق -->
-							<button
-								type="button"
-								onclick={() => (rev.success = !rev.success)}
-								class={'flex w-[4.5rem] shrink-0 items-center justify-center gap-1 rounded-full border py-2 text-[11px] font-bold transition active:scale-95 ' +
-									(rev.success
-										? 'border-emerald-500 bg-emerald-500 text-white'
-										: 'border-error bg-error text-on-error')}
-							>
-								<Icon name={rev.success ? 'check_circle' : 'cancel'} filled class="text-[13px]" />
-								{rev.success ? 'نجح' : 'أخفق'}
-							</button>
+								options={HALF_OPTIONS}
+								class="min-w-0 px-1.5 py-3 text-[11px]"
+							/>
+							<!-- أخفق / نجح side by side instead of one toggle, so both choices are visible at once -->
+							<div class="flex overflow-hidden rounded-full border border-outline-variant/30">
+								<button
+									type="button"
+									onclick={() => (rev.success = false)}
+									class={cn(
+										'px-2 py-3 text-[11px] font-bold transition active:scale-95',
+										!rev.success
+											? 'bg-error text-on-error'
+											: 'bg-surface-container-low text-on-surface-variant'
+									)}
+								>
+									أخفق
+								</button>
+								<button
+									type="button"
+									onclick={() => (rev.success = true)}
+									class={cn(
+										'px-2 py-3 text-[11px] font-bold transition active:scale-95',
+										rev.success
+											? 'bg-emerald-500 text-white'
+											: 'bg-surface-container-low text-on-surface-variant'
+									)}
+								>
+									نجح
+								</button>
+							</div>
 							<button
 								onclick={() => removeRevision(i)}
-								class="shrink-0 rounded-full p-1.5 text-error active:scale-90"
+								class="rounded-full p-1 text-error active:scale-90"
 								aria-label="حذف المراجعة"
 							>
-								<Icon name="delete" class="text-base" />
+								<Icon name="delete" class="text-[15px]" />
 							</button>
 						</div>
 					{/each}
 				</div>
 			{/if}
 
-			<div class="border-t border-outline-variant/15 pt-3">
-				<Field label="تقييم المراجعة" icon="grade">
-					<PillGroup bind:value={form.revision_rating} options={RATING_OPTIONS} />
-				</Field>
+			<div class="flex items-center gap-2">
+				<div class="flex shrink-0 items-center gap-1">
+					<Icon name="grade" class="text-base text-primary" />
+					<span class="text-[13px] font-bold text-on-surface-variant">تقييم المراجعة</span>
+				</div>
+				<PillGroup
+					bind:value={form.revision_rating}
+					options={RATING_OPTIONS}
+					compact
+					class="flex-1"
+				/>
 			</div>
 		</section>
 
-		<!-- ===== الواجب · الأدب · نقاط ===== -->
+		<!-- ===== الأدب · نقاط إضافية / حسم ===== -->
 		<section
 			class="space-y-3 rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-3.5 shadow-card"
 		>
-			<Field label="الواجب القادم" icon="assignment">
-				<input
-					bind:value={form.homework}
-					placeholder="مثال: حفظ نصف صفحة"
-					class="w-full rounded-xl bg-surface-container-low px-3 py-2.5 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-				/>
-			</Field>
-
-			<Field label="الأدب" icon="volunteer_activism">
-				<PillGroup bind:value={form.attitude} options={ATTITUDE_OPTIONS} />
-			</Field>
+			<div class="flex items-center gap-2">
+				<div class="flex shrink-0 items-center gap-1">
+					<Icon name="volunteer_activism" class="text-base text-primary" />
+					<span class="text-[13px] font-bold text-on-surface-variant">الأدب</span>
+				</div>
+				<PillGroup bind:value={form.attitude} options={ATTITUDE_OPTIONS} compact class="flex-1" />
+			</div>
 
 			<!-- Free entry, positive or negative: the institute asked for points to be
 			     added *and* deducted rather than picked from a fixed list. The chips are
 			     shortcuts, not the only way in. -->
 			<Field label="نقاط إضافية / حسم" icon="star" hint="(بالسالب للحسم)">
+				{#snippet actions()}
+					<button
+						type="button"
+						onclick={() => (form.added_points = 0)}
+						aria-label="تصفير النقاط الإضافية"
+						class="flex h-7 w-7 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant active:scale-90"
+					>
+						<Icon name="cancel" class="text-base" />
+					</button>
+				{/snippet}
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
 						<button
@@ -716,7 +1379,7 @@
 						</button>
 					</div>
 					<div class="flex flex-wrap gap-1.5">
-						{#each ADDED_POINTS_OPTIONS as v (v)}
+						{#each ADDED_POINTS_OPTIONS.filter((v) => v !== 0) as v (v)}
 							<button
 								type="button"
 								onclick={() => (form.added_points = v)}
@@ -725,19 +1388,7 @@
 										? 'border-primary bg-primary text-on-primary'
 										: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant')}
 							>
-								{v === 0 ? 'لا شيء' : `+${v}`}
-							</button>
-						{/each}
-						{#each [-5, -10] as v (v)}
-							<button
-								type="button"
-								onclick={() => (form.added_points = v)}
-								class={'rounded-full border px-3 py-1 text-[11px] font-bold transition active:scale-95 ' +
-									((form.added_points ?? 0) === v
-										? 'border-error bg-error text-on-error'
-										: 'border-outline-variant/30 bg-surface-container-low text-error')}
-							>
-								{v}
+								{`+${v}`}
 							</button>
 						{/each}
 					</div>
@@ -745,7 +1396,21 @@
 			</Field>
 		</section>
 
-		<!-- ===== ملاحظات وصعوبات — collapsed unless used ===== -->
+		<!-- ===== الملاحظات — بطاقة مستقلة ===== -->
+		<section
+			class="rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-3.5 shadow-card"
+		>
+			<Field label="الملاحظات" icon="edit_note">
+				<textarea
+					bind:value={form.notes}
+					rows="2"
+					placeholder="اكتب ملاحظاتك هنا…"
+					class="w-full resize-none rounded-xl bg-surface-container-low p-3 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+				></textarea>
+			</Field>
+		</section>
+
+		<!-- ===== الصعوبات — collapsed unless used; اختيار من قائمة جاهزة فقط ===== -->
 		<section
 			class="rounded-3xl border border-outline-variant/15 bg-surface-container-lowest shadow-card"
 		>
@@ -754,8 +1419,8 @@
 				onclick={() => (extrasOpen = !extrasOpen)}
 				class="flex w-full items-center gap-2 px-3.5 py-3 text-right"
 			>
-				<Icon name="edit_note" class="text-base text-primary" />
-				<span class="flex-1 text-[13px] font-bold text-on-surface-variant">ملاحظات وصعوبات</span>
+				<Icon name="report" class="text-base text-primary" />
+				<span class="flex-1 text-[13px] font-bold text-on-surface-variant">الصعوبات</span>
 				{#if extrasCount > 0}
 					<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary"
 						>{extrasCount}</span
@@ -769,62 +1434,179 @@
 
 			{#if extrasOpen}
 				<div class="space-y-3 border-t border-outline-variant/15 p-3.5">
-					<Field label="ملاحظات" icon="edit_note">
-						<textarea
-							bind:value={form.notes}
-							rows="2"
-							placeholder="اكتب ملاحظاتك هنا…"
-							class="w-full resize-none rounded-xl bg-surface-container-low p-3 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-						></textarea>
-					</Field>
-
-					<Field label="ملاحظات الصعوبات" icon="report">
-						<input
-							bind:value={form.problems}
-							placeholder="مثال: ضعف في مخارج الحروف"
-							class="w-full rounded-xl bg-surface-container-low px-3 py-2.5 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
-						/>
-					</Field>
-
 					{#if problemsByLevel.length > 0}
-						<Field label="الصعوبات المحددة" icon="label">
-							<div class="space-y-2.5">
-								{#each problemsByLevel as group (group.levelName)}
-									<div>
-										<p class="mb-1 text-[11px] font-semibold text-on-surface-variant/70">
-											{group.levelName}
-										</p>
-										<div class="flex flex-wrap gap-1.5">
-											{#each group.items as p (p.id)}
-												{@const selected = form.problem_ids.includes(p.id)}
-												<button
-													type="button"
-													onclick={() => toggleProblem(p.id)}
-													class={'rounded-full border px-2.5 py-1 text-[11px] font-medium transition active:scale-95 ' +
-														(selected
-															? 'border-primary bg-primary text-on-primary shadow-sm'
-															: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant')}
-												>
-													{p.name}
-												</button>
-											{/each}
-										</div>
+						<div class="space-y-2.5">
+							{#each problemsByLevel as group (group.levelName)}
+								<div>
+									<p class="mb-1 text-[11px] font-semibold text-on-surface-variant/70">
+										{group.levelName}
+									</p>
+									<div class="flex flex-wrap gap-1.5">
+										{#each group.items as p (p.id)}
+											{@const selected = form.problem_ids.includes(p.id)}
+											<button
+												type="button"
+												onclick={() => toggleProblem(p.id)}
+												class={'rounded-full border px-2.5 py-1 text-[11px] font-medium transition active:scale-95 ' +
+													(selected
+														? 'border-primary bg-primary text-on-primary shadow-sm'
+														: 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant')}
+											>
+												{p.name}
+											</button>
+										{/each}
 									</div>
-								{/each}
-							</div>
-						</Field>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="text-center text-[11px] text-on-surface-variant/50">
+							لا توجد صعوبات معرَّفة لاختيارها.
+						</p>
 					{/if}
 				</div>
 			{/if}
 		</section>
-		<!-- ===== استدعاء ولي الأمر ===== -->
-		<button
-			type="button"
-			onclick={() => (summonOpen = true)}
-			class="flex w-full items-center justify-center gap-2 rounded-3xl border border-error/25 bg-error/5 py-3.5 text-[13px] font-bold text-error active:scale-[0.98]"
+
+		<!-- ===== الاختبار القادم — مطوية افتراضياً، أسفل الصعوبات ===== -->
+		<section
+			class="rounded-3xl border border-outline-variant/15 bg-surface-container-lowest shadow-card"
 		>
-			<Icon name="groups" class="text-lg" /> طلب استدعاء ولي الأمر
-		</button>
+			<button
+				type="button"
+				onclick={() => (examSectionOpen = !examSectionOpen)}
+				class="flex w-full items-center gap-2 px-3.5 py-3 text-right"
+			>
+				<Icon name="event_upcoming" class="text-base text-primary" />
+				<span class="flex-1 text-[13px] font-bold text-on-surface-variant">الاختبار القادم</span>
+				{#if nextExam}
+					<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+						{formatDateArabic(nextExam.scheduled_date)}
+					</span>
+				{/if}
+				<Icon
+					name={examSectionOpen ? 'expand_less' : 'expand_more'}
+					class="text-lg text-on-surface-variant/50"
+				/>
+			</button>
+
+			{#if examSectionOpen}
+				<div class="space-y-2.5 border-t border-outline-variant/15 p-3.5">
+					<div class="flex items-center justify-between gap-2">
+						<div class="min-w-0 flex-1">
+							{#if nextExam}
+								<p class="truncate text-[13px] font-bold text-on-surface">{nextExam.summary}</p>
+								{#if nextExam.notes}
+									<p class="mt-0.5 truncate text-[11px] text-on-surface-variant/60">
+										{nextExam.notes}
+									</p>
+								{/if}
+							{:else}
+								<p class="text-[12px] text-on-surface-variant/50">لم يُحدَّد اختبار قادم.</p>
+							{/if}
+						</div>
+						<button
+							type="button"
+							onclick={openExamForm}
+							class="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary active:scale-95"
+						>
+							<Icon name={nextExam ? 'edit_note' : 'add'} class="text-sm" />
+							{nextExam ? 'تعديل' : 'تحديد'}
+						</button>
+					</div>
+
+					{#if examOpen}
+						<div class="space-y-2.5 border-t border-outline-variant/15 pt-3">
+							<div class="space-y-1">
+								<span class="pr-1 text-[11px] font-bold text-on-surface-variant"
+									>تاريخ الاختبار</span
+								>
+								<input
+									type="date"
+									bind:value={examForm.scheduled_date}
+									class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
+								/>
+							</div>
+							<div class="grid grid-cols-3 gap-2">
+								<input
+									bind:value={examForm.part}
+									inputmode="numeric"
+									oninput={digitsOnly}
+									placeholder="الجزء"
+									class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+								/>
+								<input
+									bind:value={examForm.exam_from}
+									inputmode="numeric"
+									placeholder="من"
+									class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+								/>
+								<input
+									bind:value={examForm.exam_to}
+									inputmode="numeric"
+									placeholder="إلى"
+									class="rounded-xl bg-surface-container-low px-2 py-2 text-center text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+								/>
+							</div>
+							<input
+								bind:value={examForm.notes}
+								placeholder="ملاحظات (اختياري)"
+								class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+							/>
+							<div class="flex gap-2">
+								<button
+									type="button"
+									onclick={() => (examOpen = false)}
+									class="flex-1 rounded-full bg-surface-container-high py-2.5 text-[12px] font-bold text-on-surface-variant active:scale-95"
+								>
+									إلغاء
+								</button>
+								{#if nextExam}
+									<button
+										type="button"
+										onclick={cancelExam}
+										class="rounded-full bg-error/10 px-4 py-2.5 text-[12px] font-bold text-error active:scale-95"
+									>
+										حذف
+									</button>
+								{/if}
+								<button
+									type="button"
+									onclick={saveExam}
+									disabled={examSaving}
+									class="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-brand py-2.5 text-[12px] font-bold text-white active:scale-95 disabled:opacity-70"
+								>
+									{#if examSaving}<Loader class="text-sm" />{/if} حفظ
+								</button>
+							</div>
+							<p class="text-[10px] text-on-surface-variant/50">
+								يتطلب تحديد الاختبار اتصالاً بالإنترنت.
+							</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</section>
+
+		<!-- ===== استدعاء ولي الأمر · حذف سجل اليوم ===== -->
+		<div class="flex gap-2">
+			<button
+				type="button"
+				onclick={() => (summonOpen = true)}
+				class="flex flex-1 items-center justify-center gap-1.5 rounded-3xl border border-error/20 bg-error/5 py-3 text-[12px] font-bold text-error active:scale-[0.98]"
+			>
+				<Icon name="groups" class="text-base" /> استدعاء ولي الأمر
+			</button>
+			{#if record}
+				<button
+					type="button"
+					onclick={() => (deleteOpen = true)}
+					class="flex flex-1 items-center justify-center gap-1.5 rounded-3xl border border-error/20 bg-error/5 py-3 text-[12px] font-bold text-error active:scale-[0.98]"
+				>
+					<Icon name="delete" class="text-base" /> حذف سجل اليوم
+				</button>
+			{/if}
+		</div>
 	{/if}
 </main>
 
@@ -837,6 +1619,16 @@
 		onDone={(msg) => flash('ok', msg)}
 	/>
 {/if}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="حذف سجل اليوم؟"
+	message="سيتم حذف كل بيانات هذا اليوم لهذا الطالب نهائياً — الحضور والتسميع والمراجعة والملاحظات. لا يمكن التراجع عن هذا الإجراء."
+	confirmLabel="حذف نهائي"
+	tone="danger"
+	icon="delete"
+	onConfirm={deleteTodayRecord}
+/>
 
 {#if feedback}
 	<div

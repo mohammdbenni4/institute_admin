@@ -120,9 +120,16 @@ export interface Student {
 	accepted_at: IsoDate | null;
 	notes: string | null;
 	halaqah_id: UUID | null;
+	student_type: StudentType | null;
+	/** Which `ScoringPreset` prices this student's card; null = the institute-wide weights. */
+	scoring_preset_id: UUID | null;
 	created_at: IsoDateTime;
 	updated_at: IsoDateTime;
 }
+
+/** The memorisation track a student follows — «رشيدي» students are located by
+ *  مرحلة/صفحة/سطر instead of جزء/سورة/آية. */
+export type StudentType = 'rashidi' | 'quran';
 
 export interface StudentCreate {
 	full_name: string;
@@ -135,6 +142,8 @@ export interface StudentCreate {
 	accepted_at?: IsoDate | null;
 	notes?: string | null;
 	halaqah_id?: UUID | null;
+	student_type?: StudentType | null;
+	scoring_preset_id?: UUID | null;
 }
 
 export type StudentUpdate = Partial<StudentCreate>;
@@ -144,13 +153,23 @@ export interface StudentImportResponse {
 }
 
 // --- Halaqahs --------------------------------------------------------------
+/** One member of a halaqah's teaching staff. */
+export interface TeacherBrief {
+	id: UUID;
+	name: string;
+}
+
 export interface Halaqah {
 	id: UUID;
 	name: string;
 	level: string | null;
 	age: string | null;
+	/** «المعلم المسؤول» — the one name printed on the student's paper report. */
 	teacher_id: UUID;
 	teacher_name: string;
+	/** Everyone who may teach this halaqah, responsible teacher first. Access is
+	 *  decided by this membership, not by `teacher_id`. */
+	teachers: TeacherBrief[];
 	halaqah_type_id: UUID;
 	halaqah_type_name: string;
 	time_id: UUID | null;
@@ -161,7 +180,10 @@ export interface Halaqah {
 
 export interface HalaqahCreate {
 	name: string;
+	/** The responsible teacher; always a member regardless of `teacher_ids`. */
 	teacher_id: UUID;
+	/** Additional teachers who may also teach this halaqah. */
+	teacher_ids?: UUID[] | null;
 	halaqah_type_id: UUID;
 	level?: string | null;
 	age?: string | null;
@@ -347,7 +369,10 @@ export interface AttendanceMatrixStudent {
 	halaqah_id: UUID | null;
 	halaqah_name: string | null;
 	teacher_id: UUID | null;
+	/** The responsible teacher — the table links to them. */
 	teacher_name: string | null;
+	/** Every teacher of the halaqah, comma-separated. */
+	teacher_names: string | null;
 	/** Every attended day, late ones included. */
 	present: number;
 	/** Subset of `present`. */
@@ -442,6 +467,18 @@ export interface ScoringSettings {
 	excused_points: number;
 	/** Points for «متأخر»; defaults to the present weight. */
 	late_points: number;
+}
+
+/** A named set of weights a student can be pinned to instead of the institute-wide
+ *  settings. Same fifteen fields plus an identity — a preset is a complete pricing
+ *  system, not a patch over the defaults. */
+export interface ScoringPreset extends ScoringSettings {
+	id: UUID;
+	name: string;
+}
+
+export interface ScoringPresetWrite extends ScoringSettings {
+	name: string;
 }
 
 /** The institute's own identity, printed on the monthly student report. */

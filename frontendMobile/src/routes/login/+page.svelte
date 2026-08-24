@@ -1,14 +1,23 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiError, login } from '$lib/api';
+	import { DEMO_EMAIL, DEMO_PASSWORD, MOCK_MODE } from '$lib/mock/config';
+	import { resetMockData } from '$lib/mock/data';
 	import Icon from '$lib/components/Icon.svelte';
 	import Loader from '$lib/components/Loader.svelte';
 
-	let email = $state('');
-	let password = $state('');
+	let email = $state(MOCK_MODE ? DEMO_EMAIL : '');
+	let password = $state(MOCK_MODE ? DEMO_PASSWORD : '');
 	let showPass = $state(false);
 	let loading = $state(false);
 	let error = $state('');
+	let resetDone = $state(false);
+
+	function resetDemoData() {
+		resetMockData();
+		resetDone = true;
+		setTimeout(() => (resetDone = false), 2000);
+	}
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -107,6 +116,26 @@
 				دخول
 			</button>
 		</form>
+
+		{#if MOCK_MODE}
+			<div
+				class="mt-6 space-y-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-center"
+			>
+				<p class="text-[12px] font-bold text-amber-700">
+					وضع البيانات التجريبية مفعّل — لا حاجة لخادم حقيقي
+				</p>
+				<p class="text-[11px] text-amber-700/80" dir="ltr">
+					{DEMO_EMAIL} / {DEMO_PASSWORD}
+				</p>
+				<button
+					type="button"
+					onclick={resetDemoData}
+					class="text-[11px] font-bold text-amber-700 underline underline-offset-2"
+				>
+					{resetDone ? 'تمت إعادة التعيين ✓' : 'إعادة تعيين البيانات التجريبية'}
+				</button>
+			</div>
+		{/if}
 
 		<p class="mt-6 text-center text-[11px] text-on-surface-variant/50">هذا التطبيق للمعلمين فقط</p>
 	</main>

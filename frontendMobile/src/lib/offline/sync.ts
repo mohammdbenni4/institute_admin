@@ -33,6 +33,10 @@ function toApiFields(rec: CachedRecord): BulkUpsertItem {
 		excuse_reason: rec.excuse_reason,
 		exam_from: rec.exam_from,
 		exam_to: rec.exam_to,
+		// Rashidi students record a line *within* the page. Omitting these here meant a
+		// record round-tripped through the server came back with the lines erased.
+		exam_from_line: rec.exam_from_line,
+		exam_to_line: rec.exam_to_line,
 		exam_total: rec.exam_total,
 		homework: rec.homework,
 		problems: rec.problems,
@@ -56,7 +60,13 @@ async function adoptServerRecords(batch: CachedRecord[], saved: DailyRecord[]): 
 		.filter((r) => !saved.some((s) => s.id === r.id))
 		.map((r) => r.id);
 	if (orphans.length) await db.records.bulkDelete(orphans);
-	await db.records.bulkPut(saved.map((r) => ({ ...r, dirty: 0 as const, localOnly: 0 as const })));
+	// The teacher may have deleted the record while this very upload was in flight —
+	// don't let the server's answer for the old save resurrect it.
+	const pendingDeleteIds = new Set((await db.pendingDeletes.toArray()).map((d) => d.id));
+	const toAdopt = saved.filter((r) => !pendingDeleteIds.has(r.id));
+	await db.records.bulkPut(
+		toAdopt.map((r) => ({ ...r, dirty: 0 as const, localOnly: 0 as const }))
+	);
 }
 
 /**
@@ -130,6 +140,25 @@ export async function retryRecord(id: string): Promise<void> {
 }
 
 /**
+ * Drain the record-deletion outbox (un-marking an attendance status that had
+ * already reached the server). Each entry is a bare record id — nothing to edit,
+ * so like summons it is "send once and forget".
+ */
+export async function pushDeletes(): Promise<void> {
+	const queued = await db.pendingDeletes.orderBy('created_at').toArray();
+	for (const item of queued) {
+		try {
+			await dailyRecordsApi.remove(item.id);
+			await db.pendingDeletes.delete(item.id);
+		} catch (e) {
+			if (isNetworkError(e)) return; // try again on the next sync
+			// 404 (already gone) or any other rejection: nothing left to retry for.
+			await db.pendingDeletes.delete(item.id);
+		}
+	}
+}
+
+/**
  * Drain the «استدعاء ولي الأمر» outbox.
  *
  * A request is created once and never edited, so the whole lifecycle is
@@ -168,6 +197,7 @@ export async function syncNow(): Promise<void> {
 	try {
 		await pushDirty();
 		await pushSummons();
+		await pushDeletes();
 		syncState.lastSyncedAt = Date.now();
 	} finally {
 		syncState.syncing = false;

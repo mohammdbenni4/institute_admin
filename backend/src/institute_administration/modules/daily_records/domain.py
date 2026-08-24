@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from institute_administration.shared.application.pagination import Page
@@ -112,6 +113,8 @@ class DailyRecord(AggregateRoot[UUID]):
         excuse_reason: str | None = None,
         exam_from: int | None = None,
         exam_to: int | None = None,
+        exam_from_line: int | None = None,
+        exam_to_line: int | None = None,
         exam_total: Decimal | float | None = None,
         homework: str | None = None,
         problems: str | None = None,
@@ -141,6 +144,10 @@ class DailyRecord(AggregateRoot[UUID]):
         self.excuse_reason = excuse_reason
         self.exam_from = exam_from
         self.exam_to = exam_to
+        # Line *within* the page. Only «رشيدي» students are located this finely; a
+        # قرآن record leaves both None.
+        self.exam_from_line = exam_from_line
+        self.exam_to_line = exam_to_line
         # Normalised to Decimal so equality and persistence behave predictably.
         self.exam_total = Decimal(str(exam_total)) if exam_total is not None else None
         self.homework = homework
@@ -186,6 +193,8 @@ class DailyRecord(AggregateRoot[UUID]):
         excuse_reason: str | None = None,
         exam_from: int | None = None,
         exam_to: int | None = None,
+        exam_from_line: int | None = None,
+        exam_to_line: int | None = None,
         exam_total: Decimal | float | None = None,
         homework: str | None = None,
         problems: str | None = None,
@@ -209,6 +218,8 @@ class DailyRecord(AggregateRoot[UUID]):
             excuse_reason=excuse_reason,
             exam_from=exam_from,
             exam_to=exam_to,
+            exam_from_line=exam_from_line,
+            exam_to_line=exam_to_line,
             exam_total=exam_total,
             homework=homework,
             problems=problems,
@@ -252,6 +263,9 @@ class DailyRecord(AggregateRoot[UUID]):
         for value in (self.exam_from, self.exam_to, self.exam_total):
             if value is not None and value < 0:
                 raise InvalidExamRangeError("قيم الاختبار يجب ألا تكون سالبة")
+        for line in (self.exam_from_line, self.exam_to_line):
+            if line is not None and line < 1:
+                raise InvalidExamRangeError("رقم السطر يجب أن يكون 1 أو أكثر")
         if self.exam_total is not None and self.exam_total > Decimal("999.99"):
             raise InvalidExamRangeError("العدد الكلي أكبر من الحد المسموح")
         if (
@@ -261,6 +275,23 @@ class DailyRecord(AggregateRoot[UUID]):
         ):
             raise InvalidExamRangeError
         # `added_points` is deliberately signed: teachers award *and* deduct points.
+
+
+class ScoringPolicyResolver(Protocol):
+    """Port: which weights price a given student's card.
+
+    Students may be pinned to a named preset instead of the institute-wide
+    settings, and the ``scoring`` module owns that lookup. Depending on this
+    protocol rather than importing the repository keeps the arrow pointing the
+    right way — ``scoring`` already imports :class:`ScoringPolicy` from here, so
+    the reverse import would close a cycle.
+    """
+
+    async def prime(self, student_ids: Sequence[UUID]) -> None:
+        """Preload a batch of students in one query, before scoring them one by one."""
+        ...
+
+    async def for_student(self, student_id: UUID) -> ScoringPolicy: ...
 
 
 class DailyRecordRepository(ABC):

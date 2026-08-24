@@ -55,8 +55,15 @@
 </script>
 
 <nav
-	class="pb-safe fixed inset-x-0 bottom-0 z-50 flex items-center justify-around rounded-t-[2rem] bg-brand-wash/90 px-4 pb-5 pt-3 shadow-[0_-10px_30px_rgba(10,92,63,0.06)] backdrop-blur-xl"
+	class="pb-safe fixed inset-x-0 bottom-0 z-50 flex items-center justify-around rounded-t-[2rem] bg-brand-wash/90 px-4 pb-5 pt-3 shadow-[0_-10px_30px_rgba(10,92,63,0.06)] backdrop-blur-xl print:hidden"
 >
+	<button
+		onclick={() => (confirmingQuit = true)}
+		class="flex flex-col items-center gap-0.5 px-4 py-1 text-brand-dark/60 transition hover:text-error active:scale-110"
+	>
+		<Icon name="power_settings_new" />
+		<span class="text-[10px] font-medium">إغلاق</span>
+	</button>
 	<a
 		href="/halaqat"
 		class={cn(
@@ -87,13 +94,6 @@
 			<span class="absolute -top-0.5 left-2 h-2 w-2 rounded-full bg-amber-500" aria-hidden="true"
 			></span>
 		{/if}
-	</button>
-	<button
-		onclick={() => (confirmingQuit = true)}
-		class="flex flex-col items-center gap-0.5 px-4 py-1 text-brand-dark/60 transition hover:text-error active:scale-110"
-	>
-		<Icon name="power_settings_new" />
-		<span class="text-[10px] font-medium">إغلاق</span>
 	</button>
 </nav>
 

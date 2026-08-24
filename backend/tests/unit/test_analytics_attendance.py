@@ -27,6 +27,7 @@ def _row(**overrides: object) -> AttendanceRow:
         "halaqah_name": "حلقة",
         "teacher_id": uuid4(),
         "teacher_name": "معلم",
+        "teacher_names": "معلم",
         "present": 0,
         "late": 0,
         "absent": 0,

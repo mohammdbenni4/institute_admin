@@ -11,7 +11,7 @@
 	}: { title: string; subtitle?: string; backHref?: string; actions?: Snippet } = $props();
 </script>
 
-<header class="app-gradient pt-safe fixed inset-x-0 top-0 z-50 text-white shadow-lg">
+<header class="app-gradient pt-safe fixed inset-x-0 top-0 z-50 text-white shadow-lg print:hidden">
 	<div class="flex h-16 items-center justify-between gap-3 px-3">
 		<div class="flex min-w-0 items-center gap-1.5">
 			{#if backHref}
@@ -30,7 +30,7 @@
 				{/if}
 			</div>
 		</div>
-		<div class="flex items-center gap-1">
+		<div class="flex items-center gap-1.5">
 			{@render actions?.()}
 		</div>
 	</div>

@@ -8,6 +8,10 @@ keeps 30 days, and prunes older ones. It refuses to keep a dump that `pg_restore
 
 Install on the VPS as root:
 
+Run it through systemd, **not** directly as root: the dump uses the local socket with
+peer authentication, so the process must *be* the `postgres` user. `sudo -u postgres
+/usr/local/bin/quran-backup` also works for an ad-hoc dump.
+
 ```bash
 cp ops/backup-db.sh /usr/local/bin/quran-backup && chmod +x /usr/local/bin/quran-backup
 cp ops/quran-backup.service ops/quran-backup.timer /etc/systemd/system/

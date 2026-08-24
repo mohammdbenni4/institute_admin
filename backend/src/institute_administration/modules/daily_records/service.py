@@ -13,6 +13,7 @@ from institute_administration.modules.daily_records.domain import (
     DailyRecordNotFoundError,
     DailyRecordRepository,
     ScoringPolicy,
+    ScoringPolicyResolver,
 )
 from institute_administration.shared.application.pagination import Page
 from institute_administration.shared.application.sentinels import UNSET, Unset
@@ -35,6 +36,8 @@ class CreateDailyRecordInput:
     excuse_reason: str | None = None
     record_date: date | None = None
     exam_from: int | None = None
+    exam_from_line: int | None = None
+    exam_to_line: int | None = None
     exam_to: int | None = None
     exam_total: Decimal | float | None = None
     homework: str | None = None
@@ -58,6 +61,8 @@ class UpdateDailyRecordInput:
     late: bool | Unset = UNSET
     excuse_reason: str | None | Unset = UNSET
     exam_from: int | None | Unset = UNSET
+    exam_from_line: int | None | Unset = UNSET
+    exam_to_line: int | None | Unset = UNSET
     exam_to: int | None | Unset = UNSET
     exam_total: Decimal | float | None | Unset = UNSET
     homework: str | None | Unset = UNSET
@@ -96,6 +101,8 @@ class UpsertDailyRecordEntry:
     late: bool = False
     excuse_reason: str | None = None
     exam_from: int | None = None
+    exam_from_line: int | None = None
+    exam_to_line: int | None = None
     exam_to: int | None = None
     exam_total: Decimal | float | None = None
     homework: str | None = None
@@ -111,10 +118,22 @@ class UpsertDailyRecordEntry:
 
 class DailyRecordService:
     def __init__(
-        self, records: DailyRecordRepository, policy: ScoringPolicy = DEFAULT_SCORING
+        self,
+        records: DailyRecordRepository,
+        policy: ScoringPolicy = DEFAULT_SCORING,
+        resolver: ScoringPolicyResolver | None = None,
     ) -> None:
         self._records = records
         self._policy = policy
+        # When present, each record is priced by *its student's* weights — a student
+        # may be pinned to a named preset. Without one every record falls back to
+        # `policy`, which is what unit tests and any non-HTTP caller get.
+        self._resolver = resolver
+
+    async def _policy_for(self, student_id: UUID) -> ScoringPolicy:
+        if self._resolver is None:
+            return self._policy
+        return await self._resolver.for_student(student_id)
 
     async def create(self, data: CreateDailyRecordInput) -> DailyRecord:
         record = DailyRecord.create(
@@ -127,6 +146,8 @@ class DailyRecordService:
             late=data.late,
             excuse_reason=data.excuse_reason,
             exam_from=data.exam_from,
+            exam_from_line=data.exam_from_line,
+            exam_to_line=data.exam_to_line,
             exam_to=data.exam_to,
             exam_total=data.exam_total,
             homework=data.homework,
@@ -139,7 +160,7 @@ class DailyRecordService:
             notes=data.notes,
             problem_ids=data.problem_ids,
         )
-        record.apply_scoring(self._policy)
+        record.apply_scoring(await self._policy_for(record.student_id))
         await self._records.add(record)
         return await self.get(record.id)
 
@@ -160,6 +181,8 @@ class DailyRecordService:
             Page(limit=500), halaqah_id=halaqah_id, record_date=record_date
         )
         by_student = {r.student_id: r for r in existing}
+        if self._resolver is not None:
+            await self._resolver.prime([e.student_id for e in entries])
         created = updated = 0
         for entry in entries:
             record = by_student.get(entry.student_id)
@@ -169,7 +192,7 @@ class DailyRecordService:
                 record.late = entry.late
                 record.excuse_reason = entry.excuse_reason
                 record.revalidate()
-                record.apply_scoring(self._policy)
+                record.apply_scoring(await self._policy_for(record.student_id))
                 await self._records.update(record)
                 updated += 1
             else:
@@ -183,7 +206,7 @@ class DailyRecordService:
                     late=entry.late,
                     excuse_reason=entry.excuse_reason,
                 )
-                record.apply_scoring(self._policy)
+                record.apply_scoring(await self._policy_for(record.student_id))
                 await self._records.add(record)
                 created += 1
         return created, updated
@@ -203,6 +226,9 @@ class DailyRecordService:
         """
         keys = [(e.student_id, e.record_date) for e in entries]
         existing = await self._records.find_by_natural_keys(keys)
+        if self._resolver is not None:
+            # One query for the whole batch instead of one per record.
+            await self._resolver.prime([e.student_id for e in entries])
 
         saved: list[DailyRecord] = []
         created = updated = 0
@@ -219,6 +245,8 @@ class DailyRecordService:
                     late=entry.late,
                     excuse_reason=entry.excuse_reason,
                     exam_from=entry.exam_from,
+                    exam_from_line=entry.exam_from_line,
+                    exam_to_line=entry.exam_to_line,
                     exam_to=entry.exam_to,
                     exam_total=entry.exam_total,
                     homework=entry.homework,
@@ -231,7 +259,7 @@ class DailyRecordService:
                     notes=entry.notes,
                     problem_ids=entry.problem_ids,
                 )
-                record.apply_scoring(self._policy)
+                record.apply_scoring(await self._policy_for(record.student_id))
                 await self._records.add(record)
                 created += 1
             else:
@@ -242,6 +270,8 @@ class DailyRecordService:
                 record.late = entry.late
                 record.excuse_reason = entry.excuse_reason
                 record.exam_from = entry.exam_from
+                record.exam_from_line = entry.exam_from_line
+                record.exam_to_line = entry.exam_to_line
                 record.exam_to = entry.exam_to
                 record.exam_total = _as_decimal(entry.exam_total)
                 record.homework = entry.homework
@@ -254,7 +284,7 @@ class DailyRecordService:
                 record.notes = entry.notes
                 record.problem_ids = list(entry.problem_ids)
                 record.revalidate()
-                record.apply_scoring(self._policy)
+                record.apply_scoring(await self._policy_for(record.student_id))
                 await self._records.update(record)
                 updated += 1
             saved.append(await self.get(record.id))
@@ -330,6 +360,10 @@ class DailyRecordService:
             record.excuse_reason = data.excuse_reason
         if data.exam_from is not UNSET:
             record.exam_from = data.exam_from
+        if data.exam_from_line is not UNSET:
+            record.exam_from_line = data.exam_from_line
+        if data.exam_to_line is not UNSET:
+            record.exam_to_line = data.exam_to_line
         if data.exam_to is not UNSET:
             record.exam_to = data.exam_to
         if data.exam_total is not UNSET:
@@ -353,7 +387,7 @@ class DailyRecordService:
         if data.problem_ids is not UNSET:
             record.problem_ids = list(data.problem_ids)
         record.revalidate()
-        record.apply_scoring(self._policy)
+        record.apply_scoring(await self._policy_for(record.student_id))
         await self._records.update(record)
         return await self.get(record_id)
 

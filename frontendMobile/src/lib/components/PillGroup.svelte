@@ -5,11 +5,14 @@
 		value = $bindable(),
 		options,
 		allowNull = true,
+		compact = false,
 		class: klass = ''
 	}: {
 		value: number | null;
 		options: { value: number; label: string }[];
 		allowNull?: boolean;
+		/** Smaller padding/text, for squeezing the group onto the same line as its label. */
+		compact?: boolean;
 		class?: string;
 	} = $props();
 
@@ -27,7 +30,8 @@
 			type="button"
 			onclick={() => pick(opt.value)}
 			class={cn(
-				'rounded-full border py-2.5 text-xs font-bold transition active:scale-95',
+				'rounded-full border font-bold transition active:scale-95',
+				compact ? 'py-1.5 text-[10px]' : 'py-2.5 text-xs',
 				value === opt.value
 					? 'border-primary bg-primary text-on-primary shadow-sm'
 					: 'border-outline-variant/30 bg-white/70 text-on-surface-variant hover:border-primary/30'

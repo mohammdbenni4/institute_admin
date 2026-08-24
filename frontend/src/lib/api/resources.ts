@@ -17,6 +17,8 @@ import type {
 	ProblemLevelCreate,
 	ProblemLevelUpdate,
 	ProblemUpdate,
+	ScoringPreset,
+	ScoringPresetWrite,
 	ScoringSettings,
 	HalaqahType,
 	HalaqahTypeCreate,
@@ -154,6 +156,16 @@ export const upcomingExamsApi = {
 export const scoringApi = {
 	get: () => api.get<ScoringSettings>('/scoring-settings'),
 	update: (body: ScoringSettings) => api.put<ScoringSettings>('/scoring-settings', body)
+};
+
+/** Named pricing systems assignable per student. Reading is open to any authenticated
+ *  user (the teacher app lists them); writing is super-admin, i.e. this dashboard. */
+export const scoringPresetsApi = {
+	list: () => api.get<{ items: ScoringPreset[]; total: number }>('/scoring-presets'),
+	create: (body: ScoringPresetWrite) => api.post<ScoringPreset>('/scoring-presets', body),
+	update: (id: UUID, body: ScoringPresetWrite) =>
+		api.put<ScoringPreset>(`/scoring-presets/${id}`, body),
+	remove: (id: UUID) => api.delete(`/scoring-presets/${id}`)
 };
 
 export const problemLevelsApi = {

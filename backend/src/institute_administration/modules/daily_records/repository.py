@@ -37,6 +37,8 @@ def _to_entity(model: DailyRecordModel, problem_ids: list[UUID] | None = None) -
         late=model.late,
         excuse_reason=model.excuse_reason,
         exam_from=model.exam_from,
+        exam_from_line=model.exam_from_line,
+        exam_to_line=model.exam_to_line,
         exam_to=model.exam_to,
         exam_total=model.exam_total,
         homework=model.homework,
@@ -68,6 +70,8 @@ def _apply(model: DailyRecordModel, record: DailyRecord) -> None:
     model.late = record.late
     model.excuse_reason = record.excuse_reason
     model.exam_from = record.exam_from
+    model.exam_from_line = record.exam_from_line
+    model.exam_to_line = record.exam_to_line
     model.exam_to = record.exam_to
     model.exam_total = record.exam_total
     model.homework = record.homework

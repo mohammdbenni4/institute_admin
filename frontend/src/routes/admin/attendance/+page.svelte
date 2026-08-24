@@ -653,12 +653,15 @@
 							>
 								{#if sortBy !== 'halaqah' || newHalaqah}
 									{#if row.teacher_id}
+										<!-- A halaqah can have several teachers. The link points at the
+										     responsible one (the column is too narrow for several links),
+										     while the text and tooltip name everyone who teaches it. -->
 										<a
 											href={`/admin/teachers/${row.teacher_id}`}
-											class="truncate text-xs font-medium text-primary hover:underline"
-											title={row.teacher_name ?? ''}
+											class="block truncate text-xs font-medium text-primary hover:underline"
+											title={row.teacher_names ?? row.teacher_name ?? ''}
 										>
-											{row.teacher_name}
+											{row.teacher_names ?? row.teacher_name}
 										</a>
 									{:else}
 										<span class="truncate text-xs text-muted-foreground">—</span>

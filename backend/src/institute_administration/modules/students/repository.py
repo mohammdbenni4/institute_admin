@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from institute_administration.core.config import get_settings
 from institute_administration.modules.students.domain import (
     InvalidHalaqahError,
+    InvalidScoringPresetError,
     Student,
     StudentRepository,
 )
@@ -31,6 +32,8 @@ def _to_entity(model: StudentModel) -> Student:
         accepted_at=model.accepted_at,
         notes=model.notes,
         halaqah_id=model.halaqah_id,
+        student_type=model.student_type,
+        scoring_preset_id=model.scoring_preset_id,
         created_at=model.created_at,
         updated_at=model.updated_at,
     )
@@ -47,6 +50,8 @@ def _apply(model: StudentModel, student: Student) -> None:
     model.accepted_at = student.accepted_at
     model.notes = student.notes
     model.halaqah_id = student.halaqah_id
+    model.student_type = student.student_type
+    model.scoring_preset_id = student.scoring_preset_id
 
 
 class SqlAlchemyStudentRepository(StudentRepository):
@@ -111,5 +116,10 @@ class SqlAlchemyStudentRepository(StudentRepository):
     async def _flush(self) -> None:
         try:
             await self._session.flush()
-        except IntegrityError as exc:  # bad halaqah_id (FK violation)
+        except IntegrityError as exc:
+            # A student row has two foreign keys now, so the failure has to be told
+            # apart before it can be described in Arabic — otherwise a bad preset id
+            # would report «الحلقة المحددة غير موجودة».
+            if "scoring_preset" in str(exc.orig):
+                raise InvalidScoringPresetError from exc
             raise InvalidHalaqahError from exc

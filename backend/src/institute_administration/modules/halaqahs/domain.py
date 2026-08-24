@@ -9,6 +9,7 @@ is computed from the students enrolled in the halaqah and surfaced through the
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -68,6 +69,14 @@ class Halaqah(AggregateRoot[UUID]):
 
 
 @dataclass(frozen=True)
+class TeacherBrief:
+    """A halaqah member, for display and for the admin's assignment picker."""
+
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True)
 class HalaqahView:
     """Read model: a halaqah with related names and its live student count."""
 
@@ -75,8 +84,13 @@ class HalaqahView:
     name: str
     level: str | None
     age: str | None
+    # The responsible teacher (المعلم المسؤول) — the single name the paper report
+    # prints. Always also present in `teachers`.
     teacher_id: UUID
     teacher_name: str
+    # Every teacher who may teach this halaqah, responsible one first. Access control
+    # is decided by this membership, not by `teacher_id`.
+    teachers: tuple[TeacherBrief, ...]
     halaqah_type_id: UUID
     halaqah_type_name: str
     time_id: UUID | None
@@ -112,7 +126,14 @@ class HalaqahRepository(ABC):
     async def count(self, *, teacher_id: UUID | None = None) -> int: ...
 
     @abstractmethod
-    async def ids_for_teacher(self, teacher_id: UUID) -> set[UUID]: ...
+    async def ids_for_teacher(self, teacher_id: UUID) -> set[UUID]:
+        """Every halaqah this teacher may reach — membership, not just responsibility."""
+        ...
+
+    @abstractmethod
+    async def set_teachers(self, halaqah_id: UUID, teacher_ids: Sequence[UUID]) -> None:
+        """Replace the halaqah's membership. The responsible teacher is always kept."""
+        ...
 
     @abstractmethod
     async def delete(self, halaqah: Halaqah) -> None: ...
@@ -125,4 +146,9 @@ class HalaqahNotFoundError(EntityNotFoundError):
 
 class InvalidHalaqahRelationError(ConflictError):
     def __init__(self, message: str = "تأكد من اختيار معلم ونوع ووقت صحيحين") -> None:
+        super().__init__(message)
+
+
+class InvalidHalaqahTeacherError(ConflictError):
+    def __init__(self, message: str = "أحد المعلمين المحددين غير موجود") -> None:
         super().__init__(message)

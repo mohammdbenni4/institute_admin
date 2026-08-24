@@ -20,8 +20,10 @@ import type {
 	Paginated,
 	PageParams,
 	Problem,
+	ScoringPreset,
 	ScoringSettings,
 	Student,
+	StudentUpdate,
 	Teacher,
 	UUID
 } from './types';
@@ -40,7 +42,10 @@ export const halaqahsApi = {
 export const studentsApi = {
 	list: (params?: PageParams & { halaqah_id?: UUID | null }) =>
 		api.get<Paginated<Student>>(`/students${qs(params)}`),
-	get: (id: UUID) => api.get<Student>(`/students/${id}`)
+	get: (id: UUID) => api.get<Student>(`/students/${id}`),
+	/** Teaching preferences only (المسار / نظام تسعير النقاط). The full `PATCH /students/{id}`
+	 *  stays super-admin — a teacher must not be able to rename a student or move them. */
+	update: (id: UUID, body: StudentUpdate) => api.patch<Student>(`/students/${id}/track`, body)
 };
 
 export const dailyRecordsApi = {
@@ -97,6 +102,10 @@ export const upcomingExamsApi = {
 
 export const scoringApi = {
 	get: () => api.get<ScoringSettings>('/scoring-settings')
+};
+
+export const scoringPresetsApi = {
+	list: () => api.get<Paginated<ScoringPreset>>('/scoring-presets')
 };
 
 export const problemsApi = {

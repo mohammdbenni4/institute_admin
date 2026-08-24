@@ -13,6 +13,7 @@ import {
 	parentSummonsApi,
 	problemsApi,
 	scoringApi,
+	scoringPresetsApi,
 	studentsApi,
 	type Attitude,
 	type DailyRecord,
@@ -21,16 +22,26 @@ import {
 	type ProblemBrief,
 	type Rating,
 	type ParentSummon,
+	type ScoringPreset,
 	type ScoringSettings,
-	type Student
+	type Student,
+	type StudentUpdate
 } from '$lib/api';
 import { computeScores } from '$lib/labels';
-import { db, metaGet, metaSet, type CachedRecord, type RecordBaseline } from './db';
+import {
+	db,
+	metaGet,
+	metaSet,
+	type CachedHalaqah,
+	type CachedRecord,
+	type RecordBaseline
+} from './db';
 import { net } from './net.svelte';
 import { refreshPending } from './state.svelte';
 import { isNetworkError, syncNow } from './sync';
 
 const SCORING_KEY = 'scoring.settings';
+const SCORING_PRESETS_KEY = 'scoring.presets';
 // Last-seen summons list, so the panel still renders something offline.
 const SUMMONS_KEY = 'summons.list';
 
@@ -105,6 +116,11 @@ async function readThrough<T>(
 	return cached;
 }
 
+/** Flatten a halaqah's membership into the plain string array Dexie can index. */
+function toCachedHalaqah(h: Halaqah): CachedHalaqah {
+	return { ...h, teacher_ids: (h.teachers ?? []).map((t) => t.id) };
+}
+
 // ---------------------------------------------------------------- reads ----------
 
 export async function listHalaqahs(
@@ -112,9 +128,11 @@ export async function listHalaqahs(
 	opts: ReadOpts<Halaqah[]> = {}
 ): Promise<Halaqah[]> {
 	return readThrough(
-		() => db.halaqahs.where('teacher_id').equals(teacherId).toArray(),
+		// `teacher_ids` (multiEntry), not `teacher_id`: the latter is only the responsible
+		// teacher, so an assisting teacher would find nothing here while offline.
+		() => db.halaqahs.where('teacher_ids').equals(teacherId).toArray(),
 		async () => (await halaqahsApi.list({ teacher_id: teacherId, limit: 200 })).items,
-		(items) => db.halaqahs.bulkPut(items).then(() => undefined),
+		(items) => db.halaqahs.bulkPut(items.map(toCachedHalaqah)).then(() => undefined),
 		(items) => items.length > 0,
 		opts
 	);
@@ -125,7 +143,7 @@ export async function getHalaqah(id: string, opts: ReadOpts<Halaqah> = {}): Prom
 		() => db.halaqahs.get(id),
 		() => halaqahsApi.get(id),
 		async (h) => {
-			if (h) await db.halaqahs.put(h);
+			if (h) await db.halaqahs.put(toCachedHalaqah(h));
 		},
 		(h) => h != null,
 		opts as ReadOpts<Halaqah | undefined>
@@ -184,6 +202,44 @@ export async function getScoring(opts: ReadOpts<ScoringSettings | null> = {}) {
 	);
 }
 
+async function cachedScoringPresets(): Promise<ScoringPreset[]> {
+	return (await metaGet<ScoringPreset[]>(SCORING_PRESETS_KEY)) ?? [];
+}
+
+/** Named pricing systems assignable to a student in halaqah settings (see `updateStudent`). */
+export async function listScoringPresets(
+	opts: ReadOpts<ScoringPreset[]> = {}
+): Promise<ScoringPreset[]> {
+	return readThrough(
+		cachedScoringPresets,
+		async () => (await scoringPresetsApi.list()).items,
+		(items) => metaSet(SCORING_PRESETS_KEY, items),
+		(items) => items.length > 0,
+		opts
+	);
+}
+
+/** The config that actually prices a student's points: their assigned preset (from cache)
+ *  falling back to the halaqah's single default scoring — mirrors `scoringFor` in the mock
+ *  server so the optimistic local total matches what the server will compute. */
+export async function getScoringForStudent(studentId: string): Promise<ScoringSettings | null> {
+	const student = await db.students.get(studentId);
+	if (student?.scoring_preset_id) {
+		const preset = (await cachedScoringPresets()).find((p) => p.id === student.scoring_preset_id);
+		if (preset) return preset;
+	}
+	return cachedScoring();
+}
+
+/** Update a student's track (رشيدي/قرآن) and/or assigned pricing preset. Requires a live
+ *  connection — unlike daily records, this settings edit has no offline queue. */
+export async function updateStudent(id: string, patch: StudentUpdate): Promise<Student> {
+	if (!canReachNetwork()) throw new Error('يتطلب هذا التغيير اتصالاً بالإنترنت');
+	const updated = await studentsApi.update(id, patch);
+	await db.students.put(updated);
+	return updated;
+}
+
 export async function listProblems(opts: ReadOpts<Problem[]> = {}): Promise<Problem[]> {
 	return readThrough(
 		() => db.problems.toArray(),
@@ -221,6 +277,10 @@ async function fetchAllRecords(query: {
  *  to be the slowest part of opening a halaqah with a full month of history. */
 async function mergeServerRecords(items: DailyRecord[]): Promise<void> {
 	if (items.length === 0) return;
+	// A record queued for deletion may still show up in a server response that was
+	// in flight before the delete reached it — without this, a background refresh
+	// could resurrect a record the teacher just deleted.
+	const pendingDeleteIds = new Set((await db.pendingDeletes.toArray()).map((d) => d.id));
 	const keys = items.map((r) => [r.student_id, r.record_date] as [string, string]);
 	const existing = await db.records.where('[student_id+record_date]').anyOf(keys).toArray();
 	const byKey = new Map(existing.map((r) => [`${r.student_id}|${r.record_date}`, r]));
@@ -228,6 +288,7 @@ async function mergeServerRecords(items: DailyRecord[]): Promise<void> {
 	const toPut: CachedRecord[] = [];
 	const toDelete: string[] = [];
 	for (const srv of items) {
+		if (pendingDeleteIds.has(srv.id)) continue;
 		const prev = byKey.get(`${srv.student_id}|${srv.record_date}`);
 		if (prev?.dirty) continue; // local edit wins until it is pushed
 		if (prev && prev.id !== srv.id) toDelete.push(prev.id);
@@ -399,6 +460,8 @@ export interface UpsertInput {
 	excuse_reason?: string | null;
 	exam_from?: number | null;
 	exam_to?: number | null;
+	exam_from_line?: number | null;
+	exam_to_line?: number | null;
 	exam_total?: number | null;
 	homework?: string | null;
 	problems?: string | null;
@@ -467,6 +530,8 @@ function blankRecord(input: UpsertInput, now: string): CachedRecord {
 		excuse_reason: null,
 		exam_from: null,
 		exam_to: null,
+		exam_from_line: null,
+		exam_to_line: null,
 		exam_total: null,
 		homework: null,
 		problems: null,
@@ -498,6 +563,8 @@ function snapshotBaseline(r: DailyRecord): RecordBaseline {
 		excuse_reason: r.excuse_reason,
 		exam_from: r.exam_from,
 		exam_to: r.exam_to,
+		exam_from_line: r.exam_from_line,
+		exam_to_line: r.exam_to_line,
 		exam_total: r.exam_total,
 		homework: r.homework,
 		problems: r.problems,
@@ -534,6 +601,8 @@ async function buildCachedRecord(
 		excuse_reason: pick(input.excuse_reason, base.excuse_reason),
 		exam_from: pick(input.exam_from, base.exam_from),
 		exam_to: pick(input.exam_to, base.exam_to),
+		exam_from_line: pick(input.exam_from_line, base.exam_from_line),
+		exam_to_line: pick(input.exam_to_line, base.exam_to_line),
 		exam_total: pick(input.exam_total, base.exam_total),
 		homework: pick(input.homework, base.homework),
 		problems: pick(input.problems, base.problems),
@@ -558,7 +627,10 @@ async function buildCachedRecord(
 		rec.problem_ids = base.problem_ids ?? base.tagged_problems.map((p) => p.id);
 	}
 
-	applyOptimisticScores(rec, scoring !== undefined ? scoring : await cachedScoring());
+	applyOptimisticScores(
+		rec,
+		scoring !== undefined ? scoring : await getScoringForStudent(rec.student_id)
+	);
 	return rec;
 }
 
@@ -617,24 +689,20 @@ export async function setAttendance(input: AttendanceInput): Promise<void> {
 	const existing = await db.records.where('[student_id+record_date]').anyOf(keys).toArray();
 	const byStudent = new Map(existing.map((r) => [r.student_id, r]));
 
-	const scoring = await cachedScoring();
 	const rows: CachedRecord[] = [];
 	for (const e of input.entries) {
+		// Resolved per student (not hoisted) — each may carry a different pricing preset.
 		rows.push(
-			await buildCachedRecord(
-				byStudent.get(e.student_id),
-				{
-					student_id: e.student_id,
-					teacher_id: input.teacher_id,
-					halaqah_id: input.halaqah_id,
-					record_date: input.record_date,
-					present: e.present,
-					excused: e.excused,
-					late: e.late,
-					excuse_reason: e.excuse_reason
-				},
-				scoring
-			)
+			await buildCachedRecord(byStudent.get(e.student_id), {
+				student_id: e.student_id,
+				teacher_id: input.teacher_id,
+				halaqah_id: input.halaqah_id,
+				record_date: input.record_date,
+				present: e.present,
+				excused: e.excused,
+				late: e.late,
+				excuse_reason: e.excuse_reason
+			})
 		);
 	}
 	await db.records.bulkPut(rows.map(toPlain));
@@ -671,11 +739,27 @@ export async function discardChange(id: string): Promise<void> {
 	await refreshPending();
 }
 
+/**
+ * Un-mark a student's attendance for a day that already had a saved record: the
+ * record is dropped locally right away, and — unless it only ever existed on this
+ * device — queued for the server to drop it too on the next sync.
+ */
+export async function deleteRecord(id: string): Promise<void> {
+	const rec = await db.records.get(id);
+	if (!rec) return;
+	await db.records.delete(id);
+	if (!rec.localOnly) {
+		await db.pendingDeletes.put({ id: rec.id, created_at: new Date().toISOString() });
+	}
+	await refreshPending();
+	void syncNow();
+}
+
 /** Roll a dirty record back to its captured baseline (server values) and mark it clean. */
 async function restoreFromBaseline(rec: CachedRecord): Promise<void> {
 	if (rec.baseline) {
 		Object.assign(rec, rec.baseline);
-		applyOptimisticScores(rec, await cachedScoring());
+		applyOptimisticScores(rec, await getScoringForStudent(rec.student_id));
 	}
 	rec.dirty = 0;
 	rec.baseline = null;

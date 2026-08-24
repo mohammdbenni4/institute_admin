@@ -20,7 +20,7 @@
 		type Time
 	} from '$lib/api';
 	import { goto } from '$app/navigation';
-	import { Pencil, Plus, Trash2 } from '@lucide/svelte';
+	import { Pencil, Plus, Trash2, X } from '@lucide/svelte';
 
 	let halaqahs = $state<Halaqah[]>([]);
 	let teachers = $state<Teacher[]>([]);
@@ -40,6 +40,9 @@
 	const emptyForm = () => ({
 		name: '',
 		teacher_id: '',
+		// Additional teachers. The responsible `teacher_id` is always a member on the
+		// server, so it is deliberately not repeated here.
+		teacher_ids: [] as string[],
 		halaqah_type_id: '',
 		level: '',
 		age: '',
@@ -57,11 +60,41 @@
 		...times.map((t) => ({ value: t.id, label: t.name }))
 	]);
 
+	/** Teachers who can still be added — everyone except the responsible one and
+	 *  those already chosen. */
+	let assignableTeachers = $derived(
+		teachers.filter((t) => t.id !== form.teacher_id && !form.teacher_ids.includes(t.id))
+	);
+	let teacherName = $derived((id: string) => teachers.find((t) => t.id === id)?.full_name ?? '—');
+
+	/** The picker's transient selection; cleared after each pick. */
+	let pendingTeacher = $state('');
+
+	function addTeacher(id: string) {
+		if (!id || form.teacher_ids.includes(id) || id === form.teacher_id) return;
+		form.teacher_ids = [...form.teacher_ids, id];
+	}
+
+	function removeTeacher(id: string) {
+		form.teacher_ids = form.teacher_ids.filter((t) => t !== id);
+	}
+
 	let filtered = $derived(
 		halaqahs.filter((h) => {
-			if (teacherFilter !== 'all' && h.teacher_id !== teacherFilter) return false;
+			if (
+				teacherFilter !== 'all' &&
+				h.teacher_id !== teacherFilter &&
+				!(h.teachers ?? []).some((t) => t.id === teacherFilter)
+			)
+				return false;
 			if (typeFilter !== 'all' && h.halaqah_type_id !== typeFilter) return false;
-			if (search && !h.name.includes(search) && !h.teacher_name.includes(search)) return false;
+			if (
+				search &&
+				!h.name.includes(search) &&
+				!(h.teachers ?? []).some((t) => t.name.includes(search)) &&
+				!h.teacher_name.includes(search)
+			)
+				return false;
 			return true;
 		})
 	);
@@ -104,6 +137,7 @@
 		editing = null;
 		form = emptyForm();
 		formError = '';
+		pendingTeacher = '';
 		dialogOpen = true;
 	}
 
@@ -112,12 +146,16 @@
 		form = {
 			name: halaqah.name,
 			teacher_id: halaqah.teacher_id,
+			teacher_ids: (halaqah.teachers ?? [])
+				.map((t) => t.id)
+				.filter((id) => id !== halaqah.teacher_id),
 			halaqah_type_id: halaqah.halaqah_type_id,
 			level: halaqah.level ?? '',
 			age: halaqah.age ?? '',
 			time_id: halaqah.time_id ?? ''
 		};
 		formError = '';
+		pendingTeacher = '';
 		dialogOpen = true;
 	}
 
@@ -132,6 +170,9 @@
 		const payload = {
 			name: form.name,
 			teacher_id: form.teacher_id,
+			// Never send the responsible teacher as an "additional" one — harmless on the
+			// server, but it would come back and show as a duplicate chip.
+			teacher_ids: form.teacher_ids.filter((id) => id !== form.teacher_id),
 			halaqah_type_id: form.halaqah_type_id,
 			level: form.level || null,
 			age: form.age || null,
@@ -210,6 +251,26 @@
 		{#snippet cell({ row, column, value })}
 			{#if column.key === 'name'}
 				<span class="font-medium text-primary">{row.name}</span>
+			{:else if column.key === 'teacher_name'}
+				<!-- Every teacher of the halaqah; the responsible one is listed first and
+				     carries the badge, since only their name reaches the printed report. -->
+				<div class="flex flex-wrap items-center gap-1">
+					{#each row.teachers ?? [{ id: row.teacher_id, name: row.teacher_name }] as t, i (t.id)}
+						<span class="inline-flex items-center gap-1 whitespace-nowrap">
+							{t.name}
+							{#if t.id === row.teacher_id}
+								<span
+									class="rounded bg-primary/10 px-1 py-px text-[10px] font-medium text-primary"
+									title="المعلم المسؤول — اسمه هو الذي يُطبع على تقرير الطالب"
+								>
+									مسؤول
+								</span>
+							{/if}
+						</span>{#if i < (row.teachers?.length ?? 1) - 1}<span class="text-muted-foreground"
+								>،</span
+							>{/if}
+					{/each}
+				</div>
 			{:else if column.key === 'actions'}
 				<div class="flex gap-1">
 					<Button
@@ -254,8 +315,54 @@
 				<Input id="name" bind:value={form.name} required />
 			</div>
 			<div class="space-y-2">
-				<Label>المعلم</Label>
+				<Label>المعلم المسؤول</Label>
 				<Select bind:value={form.teacher_id} options={teacherOptions} placeholder="اختر المعلم" />
+				<p class="text-xs text-muted-foreground">
+					اسمه هو الذي يُطبع على تقرير الطالب الشهري. له صلاحية كاملة على الحلقة ولا يمكن إزالته من
+					قائمة المعلمين.
+				</p>
+			</div>
+
+			<div class="space-y-2">
+				<Label>معلمون إضافيون</Label>
+				<p class="text-xs text-muted-foreground">
+					لكل معلم هنا نفس صلاحيات المعلم المسؤول: تسجيل الحضور والتسميع وتعديل بيانات طلاب هذه
+					الحلقة.
+				</p>
+				{#if form.teacher_ids.length > 0}
+					<div class="flex flex-wrap gap-1.5">
+						{#each form.teacher_ids as id (id)}
+							<span
+								class="inline-flex items-center gap-1 rounded-full bg-primary/10 py-1 pe-1 ps-2.5 text-sm text-primary"
+							>
+								{teacherName(id)}
+								<button
+									type="button"
+									onclick={() => removeTeacher(id)}
+									class="grid h-5 w-5 place-items-center rounded-full hover:bg-primary/20"
+									aria-label={`إزالة ${teacherName(id)}`}
+								>
+									<X class="h-3 w-3" />
+								</button>
+							</span>
+						{/each}
+					</div>
+				{/if}
+				{#if assignableTeachers.length > 0}
+					<Select
+						bind:value={pendingTeacher}
+						options={assignableTeachers.map((t) => ({ value: t.id, label: t.full_name }))}
+						placeholder="إضافة معلم…"
+						onChange={(id) => {
+							addTeacher(id);
+							// Snap back to the placeholder so the control always reads as
+							// "add another", never as a current selection.
+							pendingTeacher = '';
+						}}
+					/>
+				{:else if form.teacher_ids.length > 0}
+					<p class="text-xs text-muted-foreground">تمت إضافة جميع المعلمين المتاحين.</p>
+				{/if}
 			</div>
 			<div class="space-y-2">
 				<Label>نوع الحلقة</Label>

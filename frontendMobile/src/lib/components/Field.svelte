@@ -6,8 +6,15 @@
 		label,
 		icon = '',
 		hint = '',
-		children
-	}: { label: string; icon?: string; hint?: string; children: Snippet } = $props();
+		children,
+		actions
+	}: {
+		label: string;
+		icon?: string;
+		hint?: string;
+		children: Snippet;
+		actions?: Snippet;
+	} = $props();
 </script>
 
 <div class="space-y-2">
@@ -15,6 +22,7 @@
 		{#if icon}<Icon name={icon} class="text-base text-primary" />{/if}
 		<span class="text-[13px] font-bold text-on-surface-variant">{label}</span>
 		{#if hint}<span class="text-[10px] text-on-surface-variant/50">{hint}</span>{/if}
+		{#if actions}<span class="ms-auto">{@render actions()}</span>{/if}
 	</div>
 	{@render children()}
 </div>

@@ -30,6 +30,8 @@ class AttendanceStudent:
     halaqah_name: str | None
     teacher_id: UUID | None
     teacher_name: str | None
+    # Every teacher of the halaqah, comma-separated («المعلم» column in the table).
+    teacher_names: str | None
     present: int  # every attended day, late ones included
     late: int  # subset of `present`
     absent: int
@@ -180,6 +182,7 @@ class AnalyticsService:
             halaqah_name=row.halaqah_name,
             teacher_id=row.teacher_id,
             teacher_name=row.teacher_name,
+            teacher_names=row.teacher_names,
             present=row.present,
             late=row.late,
             absent=row.absent,

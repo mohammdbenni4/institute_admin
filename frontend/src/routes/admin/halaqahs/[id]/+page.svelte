@@ -133,7 +133,13 @@
 <div class="page-container">
 	<PageHeader
 		title={halaqah?.name ?? 'ملف الحلقة'}
-		subtitle={halaqah ? `المعلم: ${halaqah.teacher_name}` : ''}
+		subtitle={halaqah
+			? `${halaqah.teachers && halaqah.teachers.length > 1 ? 'المعلمون' : 'المعلم'}: ${(
+					halaqah.teachers ?? [{ id: halaqah.teacher_id, name: halaqah.teacher_name }]
+				)
+					.map((t) => t.name)
+					.join('، ')}`
+			: ''}
 		breadcrumbs={[{ label: 'لوحة التحكم' }, { label: 'الحلقات' }, { label: halaqah?.name ?? '…' }]}
 	>
 		{#snippet actions()}

@@ -37,15 +37,21 @@
 	});
 </script>
 
-{#if !ready}
-	<div class="app-gradient flex min-h-dvh flex-col items-center justify-center gap-4 text-white">
-		<span class="material-symbols-outlined text-6xl">menu_book</span>
-		<p class="text-lg font-bold">صرح القرآن</p>
-		<Loader class="text-2xl text-white/80" />
+<div class="device-frame">
+	<div class="device-frame-scroll">
+		{#if !ready}
+			<div
+				class="app-gradient flex min-h-dvh flex-col items-center justify-center gap-4 text-white"
+			>
+				<span class="material-symbols-outlined text-6xl">menu_book</span>
+				<p class="text-lg font-bold">صرح القرآن</p>
+				<Loader class="text-2xl text-white/80" />
+			</div>
+		{:else}
+			{@render children()}
+			{#if auth.teacher && !onLogin}
+				<SyncStatus />
+			{/if}
+		{/if}
 	</div>
-{:else}
-	{@render children()}
-	{#if auth.teacher && !onLogin}
-		<SyncStatus />
-	{/if}
-{/if}
+</div>

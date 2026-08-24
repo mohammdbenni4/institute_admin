@@ -47,6 +47,10 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("exam_from IS NULL OR exam_from >= 0", name="exam_from_non_negative"),
         CheckConstraint("exam_to IS NULL OR exam_to >= 0", name="exam_to_non_negative"),
         CheckConstraint("exam_total IS NULL OR exam_total >= 0", name="exam_total_non_negative"),
+        CheckConstraint(
+            "exam_from_line IS NULL OR exam_from_line >= 1", name="exam_from_line_positive"
+        ),
+        CheckConstraint("exam_to_line IS NULL OR exam_to_line >= 1", name="exam_to_line_positive"),
     )
 
     student_id: Mapped[UUID] = mapped_column(
@@ -69,7 +73,9 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     record_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     present: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    excused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    excused: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     # «متأخر» — a qualifier on attendance, not a fourth state: late implies present.
     late: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
@@ -80,6 +86,11 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     exam_from: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     exam_to: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # The line *within* the page, for «رشيدي» students who are located by
+    # مرحلة/صفحة/سطر. Always NULL for قرآن students, and for every record written
+    # before the رشيدي track existed.
+    exam_from_line: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    exam_to_line: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # A *count* of pages, not a page number: teachers work in halves and quarters
     # («نصف صفحة»), so this one is decimal while exam_from/exam_to stay integers.
     exam_total: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
@@ -96,7 +107,9 @@ class DailyRecordModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Denormalised, domain-derived reward-card scores.
     card_present: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     card_exam: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    card_revision: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    card_revision: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default="0"
+    )
     card_attitude: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     total_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 

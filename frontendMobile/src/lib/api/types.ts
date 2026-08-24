@@ -57,13 +57,23 @@ export interface Teacher {
 }
 
 // --- Halaqahs --------------------------------------------------------------
+/** One member of a halaqah's teaching staff. */
+export interface TeacherBrief {
+	id: UUID;
+	name: string;
+}
+
 export interface Halaqah {
 	id: UUID;
 	name: string;
 	level: string | null;
 	age: string | null;
+	/** «المعلم المسؤول» — the single name the printed report carries. */
 	teacher_id: UUID;
 	teacher_name: string;
+	/** Everyone who may teach this halaqah, responsible teacher first. A halaqah can
+	 *  have several teachers and a teacher several halaqahs. */
+	teachers: TeacherBrief[];
 	halaqah_type_id: UUID;
 	halaqah_type_name: string;
 	time_id: UUID | null;
@@ -76,6 +86,9 @@ export interface Halaqah {
 }
 
 // --- Students --------------------------------------------------------------
+/** The memorization track a student follows — set by the teacher, shown in halaqah settings. */
+export type StudentType = 'rashidi' | 'quran';
+
 export interface Student {
 	id: UUID;
 	full_name: string;
@@ -88,8 +101,16 @@ export interface Student {
 	accepted_at: IsoDate | null;
 	notes: string | null;
 	halaqah_id: UUID | null;
+	student_type: StudentType | null;
+	/** Which `ScoringPreset` prices this student's daily points; null = the halaqah's default. */
+	scoring_preset_id: UUID | null;
 	created_at: IsoDateTime;
 	updated_at: IsoDateTime;
+}
+
+export interface StudentUpdate {
+	student_type?: StudentType | null;
+	scoring_preset_id?: UUID | null;
 }
 
 // --- Problems (الصعوبات) ---------------------------------------------------
@@ -129,6 +150,11 @@ export interface DailyRecord {
 	excuse_reason: string | null;
 	exam_from: number | null;
 	exam_to: number | null;
+	/** السطر داخل صفحة «من» — يُستخدم فقط لطلاب المسار الرشيدي (صفحات/مراحل/أسطر بدل
+	 *  جزء/سورة/آية)؛ يبقى null دائماً لطلاب مسار القرآن. */
+	exam_from_line: number | null;
+	/** السطر داخل صفحة «إلى» — انظر `exam_from_line`. */
+	exam_to_line: number | null;
 	/** A page *count*, so it may be fractional («نصف صفحة» = 0.5). */
 	exam_total: number | null;
 	homework: string | null;
@@ -159,6 +185,8 @@ export interface DailyRecordCreate {
 	record_date?: IsoDate | null;
 	exam_from?: number | null;
 	exam_to?: number | null;
+	exam_from_line?: number | null;
+	exam_to_line?: number | null;
 	exam_total?: number | null;
 	homework?: string | null;
 	problems?: string | null;
@@ -214,6 +242,13 @@ export interface ScoringSettings {
 	late_points: number;
 }
 
+/** A named points-pricing system a student can be assigned in halaqah settings (managed
+ *  from the admin dashboard — this app only lists and assigns them, never authors them). */
+export interface ScoringPreset extends ScoringSettings {
+	id: UUID;
+	name: string;
+}
+
 /** One record in a bulk upload, keyed by its natural (student, date) pair. */
 export interface BulkUpsertItem {
 	student_id: UUID;
@@ -224,6 +259,8 @@ export interface BulkUpsertItem {
 	excuse_reason: string | null;
 	exam_from: number | null;
 	exam_to: number | null;
+	exam_from_line: number | null;
+	exam_to_line: number | null;
 	/** A page *count*, so it may be fractional («نصف صفحة» = 0.5). */
 	exam_total: number | null;
 	homework: string | null;

@@ -11,6 +11,8 @@
 	} from '$lib/api';
 	import { net, repo } from '$lib/offline';
 	import { ratingLabel } from '$lib/labels';
+	import { pageFullLabel } from '$lib/quran';
+	import { rashidiFullLabel } from '$lib/rashidi';
 	import {
 		addDays,
 		addMonths,
@@ -21,7 +23,6 @@
 		initials,
 		monthInputValue,
 		monthRange,
-		nextSessionDate,
 		todayIso,
 		toLatinDigits
 	} from '$lib/utils';
@@ -31,12 +32,25 @@
 		const unit = n >= 3 && n <= 10 ? 'نقاط' : 'نقطة';
 		return `${n} ${unit}`;
 	}
+
+	/** جزء/صفحة/سورة (أو مرحلة/صفحة/سطر لطلاب رشيدي) لصفحة طالب معيّن، أو رقمها وحده. */
+	function examFieldLabel(
+		isRashidiStudent: boolean,
+		page: number | null,
+		line: number | null
+	): string {
+		if (page == null) return '—';
+		if (isRashidiStudent) return rashidiFullLabel(page, line) ?? String(page);
+		return pageFullLabel(page) ?? String(page);
+	}
 	import TopBar from '$lib/components/TopBar.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Loader from '$lib/components/Loader.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import ExportReportModal from '$lib/components/ExportReportModal.svelte';
 
 	const halaqahId = $derived($page.params.halaqahId ?? '');
 	const today = todayIso();
@@ -63,15 +77,13 @@
 	// Seed the tab/date from the URL so returning from a sub-page lands on the right tab.
 	const initialTab = $page.url.searchParams.get('tab');
 	let tab = $state<Tab>(
-		initialTab === 'attendance' || initialTab === 'recitation' ? initialTab : 'overview'
+		initialTab === 'attendance' || initialTab === 'overview' ? initialTab : 'recitation'
 	);
 	// `date` is the single source of truth; the viewed month is derived from it.
 	let date = $state($page.url.searchParams.get('date') || today);
 
 	const month = $derived(monthRange(date));
 	const isCurrentMonth = $derived(monthInputValue(date) === currentMonthKey);
-	/** The halaqah's next scheduled session after the selected day. */
-	const nextSession = $derived(nextSessionDate(halaqah?.schedule, date));
 
 	function attStatus(r: DailyRecord): AttStatus {
 		if (r.present) return r.late ? 'late' : 'present';
@@ -121,35 +133,25 @@
 
 	// ===== التسميع والمراجعة tab: split students into waiting / done / absent =====
 	type RecKind = 'waiting' | 'done' | 'absent';
+	// Each group is its own collapsible box; all start open.
+	let sectionOpen = $state<Record<RecKind, boolean>>({ waiting: true, done: true, absent: true });
 	type Recitation = {
 		student: Student;
 		kind: RecKind;
 		status: AttStatus | null; // attendance for the selected date
 		points: number; // points earned on the selected date (0 if no record)
 		rating: Rating | null; // today's (done) or latest exam rating (waiting)
-		examText: string; // today's (done) or latest recitation summary
+		examFrom: number | null; // today's (done) or latest exam start page (waiting/absent)
+		examTo: number | null; // today's (done) or latest exam end page (waiting/absent)
+		// السطر داخل examFrom/examTo — لطلاب رشيدي فقط (انظر src/lib/rashidi.ts).
+		examFromLine: number | null;
+		examToLine: number | null;
 		homework: string | null; // most recent assigned homework
 	};
 
 	/** A record counts as a recitation once it carries an exam, rating, or revision. */
 	function hasRecitation(r: DailyRecord): boolean {
 		return r.rating != null || !!r.revision_lesson || r.exam_total != null || r.exam_to != null;
-	}
-
-	/** A short Arabic summary of what was recited (exam range and/or revision). */
-	function recitationText(r: DailyRecord): string {
-		const bits: string[] = [];
-		if (r.exam_from != null && r.exam_to != null) {
-			bits.push(`من ${r.exam_from} إلى ${r.exam_to}`);
-		} else if (r.exam_to != null) {
-			bits.push(`إلى ${r.exam_to}`);
-		} else if (r.exam_from != null) {
-			bits.push(`من ${r.exam_from}`);
-		} else if (r.exam_total != null) {
-			bits.push(`${r.exam_total} صفحة`);
-		}
-		if (r.revision_lesson) bits.push('مراجعة');
-		return bits.join(' · ') || '—';
 	}
 
 	const recitation = $derived.by(() => {
@@ -171,7 +173,10 @@
 					status: st,
 					points: dayPoints,
 					rating: lastRecit?.rating ?? null,
-					examText: lastRecit ? recitationText(lastRecit) : 'لم يُسجّل تسميع بعد',
+					examFrom: lastRecit?.exam_from ?? null,
+					examTo: lastRecit?.exam_to ?? null,
+					examFromLine: lastRecit?.exam_from_line ?? null,
+					examToLine: lastRecit?.exam_to_line ?? null,
 					homework: lastHw
 				});
 			} else if (todayRec && hasRecitation(todayRec)) {
@@ -181,7 +186,10 @@
 					status: st,
 					points: dayPoints,
 					rating: todayRec.rating,
-					examText: recitationText(todayRec),
+					examFrom: todayRec.exam_from ?? null,
+					examTo: todayRec.exam_to ?? null,
+					examFromLine: todayRec.exam_from_line ?? null,
+					examToLine: todayRec.exam_to_line ?? null,
 					homework: todayRec.homework
 				});
 			} else {
@@ -191,7 +199,10 @@
 					status: st,
 					points: dayPoints,
 					rating: lastRecit?.rating ?? null,
-					examText: lastRecit ? recitationText(lastRecit) : 'لم يُسجّل تسميع بعد',
+					examFrom: lastRecit?.exam_from ?? null,
+					examTo: lastRecit?.exam_to ?? null,
+					examFromLine: lastRecit?.exam_from_line ?? null,
+					examToLine: lastRecit?.exam_to_line ?? null,
 					homework: lastHw
 				});
 			}
@@ -207,6 +218,81 @@
 	let saving = $state(false);
 	let feedback = $state<{ type: 'ok' | 'err'; text: string } | null>(null);
 	let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+	// حذف سجل اليوم لكل الطلاب
+	let deleteAllOpen = $state(false);
+	let deletingAll = $state(false);
+
+	// ===== ملاحظة عامة لكل الطلاب (تبويب التسميع) =====
+	let generalNoteOpen = $state(false);
+	let generalNoteText = $state('');
+	let generalNoteError = $state('');
+	let savingGeneralNote = $state(false);
+
+	// ===== تقرير مصغّر لفترة محددة (تبويب نظرة عامة) =====
+	interface ReportRow {
+		student: Student;
+		totalPoints: number;
+		firstPage: number | null;
+		lastPage: number | null;
+		presentCount: number;
+		absentCount: number;
+		excusedCount: number;
+		behaviorPct: number;
+	}
+	let reportOpen = $state(false);
+	let reportFrom = $state('');
+	let reportTo = $state('');
+	let reportLoading = $state(false);
+	let reportGenerated = $state(false);
+	let reportRows = $state<ReportRow[]>([]);
+
+	// ===== تصدير تقرير (نافذة منبثقة، أزرها في شريط العنوان) =====
+	let exportOpen = $state(false);
+
+	/** Aggregate every student's records within [reportFrom, reportTo] into one row each. */
+	async function generateReport(): Promise<void> {
+		if (!reportFrom || !reportTo || reportLoading) return;
+		reportLoading = true;
+		reportGenerated = false;
+		try {
+			const records = await repo.listMonthRecords(halaqahId, reportFrom, reportTo, { force: true });
+			const byStudent = new Map<string, DailyRecord[]>();
+			for (const r of records) {
+				const arr = byStudent.get(r.student_id);
+				if (arr) arr.push(r);
+				else byStudent.set(r.student_id, [r]);
+			}
+			reportRows = students.map((s) => {
+				const recs = (byStudent.get(s.id) ?? [])
+					.slice()
+					.sort((a, b) => a.record_date.localeCompare(b.record_date));
+				const first = recs.find((r) => r.exam_from != null || r.exam_to != null);
+				const last = [...recs].reverse().find((r) => r.exam_to != null || r.exam_from != null);
+				const withAttitude = recs.filter((r) => r.attitude != null);
+				const behaviorPct = withAttitude.length
+					? Math.round(
+							(withAttitude.reduce((sum, r) => sum + (r.attitude ?? 0), 0) /
+								(withAttitude.length * 3)) *
+								100
+						)
+					: 0;
+				return {
+					student: s,
+					totalPoints: recs.reduce((sum, r) => sum + r.total_points, 0),
+					firstPage: first ? (first.exam_from ?? first.exam_to) : null,
+					lastPage: last ? (last.exam_to ?? last.exam_from) : null,
+					presentCount: recs.filter((r) => r.present).length,
+					absentCount: recs.filter((r) => !r.present && !r.excused).length,
+					excusedCount: recs.filter((r) => r.excused).length,
+					behaviorPct
+				};
+			});
+			reportGenerated = true;
+		} finally {
+			reportLoading = false;
+		}
+	}
 
 	// Seed the selections from saved records for the chosen date; leave students with
 	// no record unset (no default) so the teacher chooses explicitly.
@@ -240,7 +326,11 @@
 		if (saving || !auth.teacher || students.length === 0) return;
 		// Only save students the teacher actually marked (no forced default).
 		const marked = students.filter((s) => attendance[s.id] != null);
-		if (marked.length === 0) {
+		// Un-marked students who already had a saved record for this date: tapping the
+		// active status again clears it, and that should delete the record entirely
+		// rather than silently leaving the old status in place.
+		const unmarked = students.filter((s) => attendance[s.id] == null && dateRecords.has(s.id));
+		if (marked.length === 0 && unmarked.length === 0) {
 			flash('err', 'لم تحدّد حضور أي طالب');
 			return;
 		}
@@ -264,12 +354,17 @@
 		});
 		saving = true;
 		try {
-			await repo.setAttendance({
-				halaqah_id: halaqahId,
-				teacher_id: auth.teacher.id,
-				record_date: date,
-				entries
-			});
+			if (entries.length > 0) {
+				await repo.setAttendance({
+					halaqah_id: halaqahId,
+					teacher_id: auth.teacher.id,
+					record_date: date,
+					entries
+				});
+			}
+			for (const s of unmarked) {
+				await repo.deleteRecord(dateRecords.get(s.id)!.id);
+			}
 			await reloadRecords();
 			flash(
 				'ok',
@@ -279,6 +374,75 @@
 			flash('err', errorMessage(e, 'تعذّر حفظ الحضور'));
 		} finally {
 			saving = false;
+		}
+	}
+
+	/** Delete every saved daily record (attendance + recitation) for the selected date,
+	 *  across the whole halaqah. */
+	async function deleteAllToday() {
+		if (deletingAll) return;
+		const ids = [...dateRecords.values()].map((r) => r.id);
+		if (ids.length === 0) return;
+		deletingAll = true;
+		try {
+			for (const id of ids) await repo.deleteRecord(id);
+			attendance = {};
+			excuseReasons = {};
+			await reloadRecords();
+			flash(
+				'ok',
+				net.online ? `تم حذف سجل ${ids.length} طالب` : 'حُذف محلياً — سيُحذف من الخادم عند الاتصال'
+			);
+		} catch (e) {
+			flash('err', errorMessage(e, 'تعذّر حذف السجل'));
+		} finally {
+			deletingAll = false;
+		}
+	}
+
+	/** Append one shared note to every student's daily record for the selected date.
+	 *  Only students who already have a record today are touched — there is nothing
+	 *  to attach a note to for a student whose attendance hasn't been taken yet. */
+	async function applyGeneralNote() {
+		if (savingGeneralNote || !auth.teacher) return;
+		const text = generalNoteText.trim();
+		if (!text) {
+			generalNoteError = 'اكتب نص الملاحظة';
+			return;
+		}
+		const targets = students.filter((s) => dateRecords.has(s.id));
+		if (targets.length === 0) {
+			generalNoteError = 'لا يوجد سجل محفوظ لهذا اليوم لإضافة الملاحظة إليه';
+			return;
+		}
+		generalNoteError = '';
+		savingGeneralNote = true;
+		try {
+			for (const s of targets) {
+				const rec = dateRecords.get(s.id)!;
+				const merged = rec.notes && rec.notes.trim() ? `${rec.notes.trim()}\n${text}` : text;
+				await repo.upsertDailyRecord({
+					student_id: s.id,
+					teacher_id: auth.teacher.id,
+					halaqah_id: halaqahId,
+					record_date: date,
+					notes: merged
+				});
+			}
+			await reloadRecords();
+			generalNoteText = '';
+			generalNoteOpen = false;
+			const skipped = students.length - targets.length;
+			flash(
+				'ok',
+				skipped > 0
+					? `أُضيفت الملاحظة لـ ${targets.length} طالب (تخطّينا ${skipped} بلا سجل لهذا اليوم)`
+					: `أُضيفت الملاحظة لـ ${targets.length} طالب`
+			);
+		} catch (e) {
+			generalNoteError = errorMessage(e, 'تعذّر إضافة الملاحظة');
+		} finally {
+			savingGeneralNote = false;
 		}
 	}
 
@@ -389,9 +553,9 @@
 	};
 
 	const TABS: { key: Tab; label: string; icon: string }[] = [
-		{ key: 'overview', label: 'نظرة عامة', icon: 'insights' },
+		{ key: 'recitation', label: 'التسميع', icon: 'menu_book' },
 		{ key: 'attendance', label: 'الحضور', icon: 'fact_check' },
-		{ key: 'recitation', label: 'التسميع والمراجعة', icon: 'menu_book' }
+		{ key: 'overview', label: 'نظرة عامة', icon: 'insights' }
 	];
 </script>
 
@@ -476,7 +640,7 @@
 {#snippet attBtn(sid: string, value: AttStatus, label: string, activeClass: string)}
 	<button
 		type="button"
-		onclick={() => (attendance[sid] = value)}
+		onclick={() => (attendance[sid] = attendance[sid] === value ? undefined : value)}
 		class={cn(
 			'rounded-full border py-2 text-[11px] font-bold transition active:scale-95',
 			attendance[sid] === value
@@ -513,96 +677,118 @@
 	{/if}
 {/snippet}
 
-{#snippet infoCol(label: string, value: string)}
-	<div class="min-w-0 flex-1">
-		<p class="text-[11px] font-medium text-on-surface-variant/45">{label}</p>
-		<p class="truncate text-[13px] font-bold text-primary">{value}</p>
-	</div>
+{#snippet infoLine(label: string, value: string)}
+	<p class="truncate text-[11px]">
+		<span class="font-medium text-on-surface-variant/45">{label}:</span>
+		<span class="font-bold text-primary">{value}</span>
+	</p>
 {/snippet}
 
 {#snippet recitationCard(item: Recitation)}
 	<a
 		href={`/halaqat/${halaqahId}/${item.student.id}/recitation?date=${date}`}
-		class="flex items-center gap-3 px-4 py-3.5 transition active:bg-surface-container-low"
+		class="flex items-center gap-2.5 px-4 py-2.5 transition active:bg-surface-container-low"
 	>
 		<!-- avatar -->
 		<div
-			class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-deep text-sm font-bold text-white shadow-sm"
+			class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-deep text-[11px] font-bold text-white shadow-sm"
 		>
 			{initials(item.student.full_name)}
 		</div>
 
+		<!-- name, with points + rating stacked right underneath it -->
 		<div class="min-w-0 flex-1">
-			<!-- line 1: name + points (+ rating) -->
-			<div class="flex items-center gap-2">
-				<h3 class="min-w-0 flex-1 truncate text-[16px] font-bold text-on-surface">
-					{item.student.full_name}
-				</h3>
+			<h3 class="truncate text-[13px] font-bold text-on-surface">{item.student.full_name}</h3>
+			<div class="mt-1 flex items-center gap-1.5">
 				<span
-					class="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-tint px-2.5 py-1 text-[11px] font-bold text-brand-deep"
+					class="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold text-brand-deep"
 				>
-					<Icon name="star" filled class="text-[12px]" />
+					<Icon name="star" filled class="text-[10px]" />
 					{pointsLabel(item.points)}
 				</span>
 				{#if item.kind !== 'absent' && item.rating != null}
 					<span
-						class="shrink-0 rounded-full bg-brand-tint px-2.5 py-1 text-[11px] font-bold text-brand-deep"
+						class="shrink-0 rounded-full bg-brand-tint px-2 py-0.5 text-[10px] font-bold text-brand-deep"
 						>{ratingLabel(item.rating)}</span
 					>
 				{/if}
 			</div>
+		</div>
 
-			<!-- line 2: two columns split by a vertical line -->
-			<div class="mt-2 flex items-stretch gap-3">
-				{#if item.kind === 'done'}
-					<div class="min-w-0 flex-1">
-						<p class="text-[11px] font-medium text-on-surface-variant/45">الحالة</p>
-						<p class="flex items-center gap-1 truncate text-[13px] font-bold text-primary">
-							<Icon name="check_circle" filled class="text-[14px]" /> تم الرصد بنجاح
-						</p>
-					</div>
-					<div class="w-px self-stretch bg-outline-variant/30"></div>
-					{@render infoCol('أتمّ التسميع', item.examText)}
-				{:else if item.kind === 'absent'}
-					<div class="min-w-0 flex-1">
-						<p class="text-[11px] font-medium text-on-surface-variant/45">الحالة</p>
-						<div class="pt-0.5">{@render statusChip(item.status ?? undefined)}</div>
-					</div>
-					<div class="w-px self-stretch bg-outline-variant/30"></div>
-					{@render infoCol('آخر تسميع', item.examText)}
-				{:else}
-					{@render infoCol('الوظيفة الحالية', toLatinDigits(item.homework) || 'لا يوجد واجب')}
-					<div class="w-px self-stretch bg-outline-variant/30"></div>
-					{@render infoCol('آخر تسميع', item.examText)}
-				{/if}
-			</div>
+		<!-- من / إلى / وظيفة — نفس فكرة بطاقة "آخر جلسة" في صفحة التسميع -->
+		<div class="w-[38%] shrink-0 space-y-0.5">
+			{#if item.kind === 'absent'}
+				<div class="flex justify-end">{@render statusChip(item.status ?? undefined)}</div>
+			{/if}
+			{@render infoLine(
+				'من',
+				toLatinDigits(
+					examFieldLabel(item.student.student_type === 'rashidi', item.examFrom, item.examFromLine)
+				)
+			)}
+			{@render infoLine(
+				'إلى',
+				toLatinDigits(
+					examFieldLabel(item.student.student_type === 'rashidi', item.examTo, item.examToLine)
+				)
+			)}
+			{@render infoLine('وظيفة', toLatinDigits(item.homework) || '—')}
 		</div>
 	</a>
 {/snippet}
 
-{#snippet sectionHeader(icon: string, label: string, n: number, tone: string)}
-	<div class={cn('flex items-center gap-2 rounded-full px-4 py-2 text-[14px] font-bold', tone)}>
-		<Icon name={icon} filled class="text-lg" />
-		<span>{label}</span>
-		<span class="ms-auto rounded-full bg-white/70 px-2 py-0.5 text-[11px]">{n}</span>
-	</div>
-{/snippet}
-
-{#snippet recitationSection(icon: string, label: string, items: Recitation[], tone: string)}
-	<div class="space-y-2.5">
-		{@render sectionHeader(icon, label, items.length, tone)}
-		<div
-			class="divide-y divide-outline-variant/10 overflow-hidden rounded-[1.75rem] border border-outline-variant/10 bg-surface-container-lowest shadow-card"
+{#snippet recitationSection(
+	kind: RecKind,
+	icon: string,
+	label: string,
+	items: Recitation[],
+	tone: string
+)}
+	<div
+		class="overflow-hidden rounded-[1.75rem] border border-outline-variant/10 bg-surface-container-lowest shadow-card"
+	>
+		<button
+			type="button"
+			onclick={() => (sectionOpen[kind] = !sectionOpen[kind])}
+			class={cn(
+				'flex w-full items-center justify-between gap-2 px-4 py-3 text-[14px] font-bold',
+				tone
+			)}
 		>
-			{#each items as item (item.student.id)}
-				{@render recitationCard(item)}
-			{/each}
-		</div>
+			<span class="flex min-w-0 items-center gap-2">
+				<Icon name={icon} filled class="shrink-0 text-lg" />
+				<span class="truncate">{label}</span>
+				<span class="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[11px]">{items.length}</span
+				>
+			</span>
+			<Icon name={sectionOpen[kind] ? 'expand_less' : 'expand_more'} class="shrink-0 text-xl" />
+		</button>
+		{#if sectionOpen[kind]}
+			<div class="divide-y divide-outline-variant/10 border-t border-outline-variant/10">
+				{#each items as item (item.student.id)}
+					{@render recitationCard(item)}
+				{/each}
+			</div>
+		{/if}
 	</div>
 {/snippet}
 
 <TopBar title={halaqah?.name ?? 'الحلقة'} subtitle="إدارة الحلقة" backHref="/halaqat">
 	{#snippet actions()}
+		<a
+			href={`/halaqat/${halaqahId}/settings`}
+			class="rounded-full p-2 transition hover:bg-white/10 active:scale-95"
+			aria-label="إعدادات الحلقة"
+		>
+			<Icon name="settings" class="text-2xl" />
+		</a>
+		<button
+			onclick={() => (exportOpen = true)}
+			class="rounded-full p-2 transition hover:bg-white/10 active:scale-95"
+			aria-label="تصدير تقرير"
+		>
+			<Icon name="print" class="text-2xl" />
+		</button>
 		<button
 			onclick={refresh}
 			disabled={refreshing}
@@ -613,6 +799,14 @@
 		</button>
 	{/snippet}
 </TopBar>
+
+<ExportReportModal
+	bind:open={exportOpen}
+	{halaqahId}
+	halaqahName={halaqah?.name ?? 'الحلقة'}
+	teacherName={halaqah?.teacher_name ?? ''}
+	{students}
+/>
 
 <main class="mx-auto max-w-2xl px-4 pb-28 pt-20" dir="rtl">
 	{#if status === 'loading'}
@@ -626,8 +820,10 @@
 				<button
 					onclick={() => (tab = t.key)}
 					class={cn(
-						'flex flex-1 items-center justify-center gap-1 rounded-full py-2 text-[11px] font-bold transition active:scale-95',
-						tab === t.key ? 'bg-primary text-on-primary shadow-sm' : 'text-on-surface-variant/70'
+						'flex flex-1 items-center justify-center gap-1 rounded-full border py-2 text-[11px] font-bold transition active:scale-95',
+						tab === t.key
+							? 'border-primary bg-primary text-on-primary shadow-sm'
+							: 'border-outline-variant/70 text-on-surface-variant/70'
 					)}
 				>
 					<Icon name={t.icon} class="text-sm" filled={tab === t.key} />
@@ -735,6 +931,110 @@
 						</div>
 					</div>
 				</section>
+
+				<!-- ===== تقرير مصغّر لفترة محددة ===== -->
+				<section
+					class="rounded-[2rem] border border-outline-variant/15 bg-surface-container-lowest p-4 shadow-card"
+				>
+					<button
+						type="button"
+						onclick={() => (reportOpen = !reportOpen)}
+						class="flex w-full items-center gap-2 text-right"
+					>
+						<Icon name="fact_check" class="text-base text-primary" />
+						<span class="flex-1 text-[13px] font-bold text-on-surface-variant"
+							>تقرير لفترة محددة</span
+						>
+						<Icon
+							name={reportOpen ? 'expand_less' : 'expand_more'}
+							class="text-lg text-on-surface-variant/50"
+						/>
+					</button>
+
+					{#if reportOpen}
+						<div class="mt-3 space-y-3 border-t border-outline-variant/15 pt-3">
+							<div class="grid grid-cols-2 gap-2">
+								<label class="space-y-1">
+									<span class="pr-1 text-[11px] font-bold text-on-surface-variant">من</span>
+									<input
+										type="date"
+										bind:value={reportFrom}
+										max={reportTo || today}
+										class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
+									/>
+								</label>
+								<label class="space-y-1">
+									<span class="pr-1 text-[11px] font-bold text-on-surface-variant">إلى</span>
+									<input
+										type="date"
+										bind:value={reportTo}
+										min={reportFrom}
+										max={today}
+										class="w-full rounded-xl bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
+									/>
+								</label>
+							</div>
+							<button
+								onclick={generateReport}
+								disabled={reportLoading || !reportFrom || !reportTo}
+								class="flex w-full items-center justify-center gap-2 rounded-full bg-brand py-3 text-sm font-bold text-white active:scale-[0.98] disabled:opacity-60"
+							>
+								{#if reportLoading}
+									<Loader class="text-lg" /> جارٍ الإعداد…
+								{:else}
+									<Icon name="fact_check" class="text-lg" /> إنشاء التقرير
+								{/if}
+							</button>
+
+							{#if reportRows.length > 0}
+								<div
+									class="hide-scrollbar overflow-x-auto rounded-2xl border border-outline-variant/15"
+								>
+									<table class="w-full min-w-[600px] text-[11px]">
+										<thead>
+											<tr class="bg-surface-container-low text-on-surface-variant/70">
+												<th
+													class="sticky right-0 z-10 bg-surface-container-low px-2 py-2 text-right"
+													>الطالب</th
+												>
+												<th class="px-2 py-2">النقاط</th>
+												<th class="px-2 py-2">أول صفحة</th>
+												<th class="px-2 py-2">آخر صفحة</th>
+												<th class="px-2 py-2">حضور</th>
+												<th class="px-2 py-2">غياب</th>
+												<th class="px-2 py-2">إذن</th>
+												<th class="px-2 py-2">نسبة السلوك</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#each reportRows as row (row.student.id)}
+												<tr class="border-t border-outline-variant/10">
+													<td
+														class="sticky right-0 truncate bg-surface-container-lowest px-2 py-2 font-bold text-on-surface"
+														>{row.student.full_name}</td
+													>
+													<td class="px-2 py-2 text-center font-bold text-primary"
+														>{row.totalPoints}</td
+													>
+													<td class="px-2 py-2 text-center">{row.firstPage ?? '—'}</td>
+													<td class="px-2 py-2 text-center">{row.lastPage ?? '—'}</td>
+													<td class="px-2 py-2 text-center text-emerald-700">{row.presentCount}</td>
+													<td class="px-2 py-2 text-center text-error">{row.absentCount}</td>
+													<td class="px-2 py-2 text-center text-blue-700">{row.excusedCount}</td>
+													<td class="px-2 py-2 text-center">{row.behaviorPct}%</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else if reportGenerated}
+								<p class="text-center text-[11px] text-on-surface-variant/50">
+									لا توجد سجلات في هذه الفترة.
+								</p>
+							{/if}
+						</div>
+					{/if}
+				</section>
 			</div>
 		{:else if tab === 'attendance'}
 			<!-- ===== Fast attendance: 3-state per student ===== -->
@@ -811,24 +1111,29 @@
 						<Icon name="save" class="text-xl" /> حفظ الحضور
 					{/if}
 				</button>
+
+				{#if dateRecords.size > 0}
+					<button
+						onclick={() => (deleteAllOpen = true)}
+						disabled={deletingAll}
+						class="flex w-full items-center justify-center gap-2 rounded-2xl border border-error/20 bg-error/5 px-4 py-3 text-center text-[13px] font-bold leading-tight text-error active:scale-[0.98] disabled:opacity-60"
+					>
+						{#if deletingAll}
+							<Loader class="shrink-0 text-lg" /> جارٍ الحذف…
+						{:else}
+							<Icon name="delete" class="shrink-0 text-lg" /> حذف سجل اليوم لكل الطلاب
+						{/if}
+					</button>
+				{/if}
 			</div>
 		{:else}
 			<!-- ===== Recitation & revision: waiting / done / absent ===== -->
 			<div class="space-y-6">
 				{@render dateBar()}
 
-				{#if nextSession}
-					<div
-						class="flex items-center gap-1.5 rounded-full border border-outline-variant/15 bg-primary/5 px-4 py-2 text-[11px]"
-					>
-						<Icon name="event_upcoming" class="text-[15px] text-primary" />
-						<span class="text-on-surface-variant/60">التسميع القادم</span>
-						<span class="font-bold text-on-surface">{formatDateArabic(nextSession)}</span>
-					</div>
-				{/if}
-
 				{#if recitation.waiting.length > 0}
 					{@render recitationSection(
+						'waiting',
 						'pending_actions',
 						'طلاب بانتظار التسميع',
 						recitation.waiting,
@@ -838,6 +1143,7 @@
 
 				{#if recitation.done.length > 0}
 					{@render recitationSection(
+						'done',
 						'task_alt',
 						'طلاب أتمّوا التسميع',
 						recitation.done,
@@ -847,12 +1153,22 @@
 
 				{#if recitation.absent.length > 0}
 					{@render recitationSection(
+						'absent',
 						'event_busy',
 						'الطلاب الغائبون',
 						recitation.absent,
 						'bg-error/10 text-error'
 					)}
 				{/if}
+
+				<!-- ===== ملاحظة عامة لكل الطلاب ===== -->
+				<button
+					type="button"
+					onclick={() => (generalNoteOpen = true)}
+					class="flex w-full items-center justify-center gap-2 rounded-2xl border border-outline-variant/20 bg-surface-container-low px-4 py-3 text-[13px] font-bold text-on-surface-variant active:scale-[0.98]"
+				>
+					<Icon name="edit_note" class="text-lg text-primary" /> ملاحظة عامة لكل الطلاب
+				</button>
 			</div>
 		{/if}
 	{/if}
@@ -867,6 +1183,80 @@
 	>
 		<Icon name={feedback.type === 'ok' ? 'check_circle' : 'error'} class="text-lg" />
 		{feedback.text}
+	</div>
+{/if}
+
+<ConfirmDialog
+	bind:open={deleteAllOpen}
+	title="حذف سجل اليوم لكل الطلاب؟"
+	message="سيتم حذف كل سجلات الحضور والتسميع المحفوظة لهذا اليوم ({formatDateArabic(
+		date
+	)}) لجميع طلاب الحلقة نهائياً. لا يمكن التراجع عن هذا الإجراء."
+	confirmLabel="حذف نهائي"
+	tone="danger"
+	icon="delete"
+	onConfirm={deleteAllToday}
+/>
+
+{#if generalNoteOpen}
+	<button
+		type="button"
+		onclick={() => (generalNoteOpen = false)}
+		class="fixed inset-0 z-[70] bg-black/40"
+		aria-label="إلغاء"
+	></button>
+	<div
+		class="fixed inset-x-0 bottom-0 z-[71] space-y-4 rounded-t-[2rem] bg-surface-container-lowest p-5 pb-10 shadow-2xl"
+		dir="rtl"
+		role="dialog"
+		aria-modal="true"
+	>
+		<div class="flex items-center gap-2">
+			<Icon name="edit_note" class="text-2xl text-primary" />
+			<div class="min-w-0 flex-1">
+				<p class="text-[16px] font-bold text-on-surface">ملاحظة عامة لكل الطلاب</p>
+				<p class="truncate text-[12px] text-on-surface-variant/70">{formatDateArabic(date)}</p>
+			</div>
+			<button
+				type="button"
+				onclick={() => (generalNoteOpen = false)}
+				class="rounded-full p-2 text-on-surface-variant active:scale-90"
+				aria-label="إغلاق"
+			>
+				<Icon name="close" />
+			</button>
+		</div>
+
+		<div class="space-y-1.5">
+			<span class="pr-1 text-[13px] font-bold text-on-surface-variant">نص الملاحظة</span>
+			<textarea
+				bind:value={generalNoteText}
+				rows="3"
+				placeholder="مثال: غداً اختبار عام في الحلقة"
+				class="w-full resize-none rounded-2xl bg-surface-container-low p-3.5 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+			></textarea>
+			{#if generalNoteError}
+				<p class="pr-1 text-[12px] font-bold text-error">{generalNoteError}</p>
+			{/if}
+		</div>
+
+		<p class="text-[11px] leading-relaxed text-on-surface-variant/60">
+			تُضاف هذه الملاحظة إلى سجل كل طالب لديه سجل محفوظ في هذا اليوم ({formatDateArabic(date)}).
+		</p>
+
+		<button
+			type="button"
+			onclick={applyGeneralNote}
+			disabled={savingGeneralNote}
+			class="flex w-full items-center justify-center gap-2 rounded-full bg-brand py-3.5 text-sm font-bold text-white active:scale-[0.98] disabled:opacity-70"
+		>
+			{#if savingGeneralNote}
+				<Loader class="text-lg" />
+			{:else}
+				<Icon name="edit_note" class="text-lg" />
+			{/if}
+			إضافة للجميع
+		</button>
 	</div>
 {/if}
 

@@ -15,9 +15,16 @@ set -Eeuo pipefail
 
 DB_NAME="${DB_NAME:-institute_administration}"
 DB_USER="${DB_USER:-postgres}"
-DB_HOST="${DB_HOST:-localhost}"
+# Empty by default *on purpose*: with no -h, pg_dump uses the local unix socket and
+# peer authentication, so running as the `postgres` user needs no password and none
+# has to be stored anywhere. Setting DB_HOST forces TCP, which then needs a password.
+DB_HOST="${DB_HOST:-}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/quran}"
 RETAIN_DAYS="${RETAIN_DAYS:-30}"
+
+# Build the connection arguments once.
+conn_args=(-U "$DB_USER")
+[ -n "$DB_HOST" ] && conn_args+=(-h "$DB_HOST")
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 target="${BACKUP_DIR}/${DB_NAME}-${timestamp}.dump"
@@ -29,9 +36,23 @@ chmod 700 "$BACKUP_DIR"
 
 log() { printf '%s  %s\n' "$(date -Is)" "$*"; }
 
+# A failed dump must not leave a truncated file behind: a 0-byte file in the backup
+# directory looks like a backup until the day you need it.
+#
+# `return 0` is load-bearing. Without it the final test fails on the happy path, the
+# EXIT trap returns non-zero, and that becomes the script's exit status — systemd
+# then reports a failure for a backup that actually succeeded.
+cleanup_partial() {
+    if [ -f "$target" ] && [ ! -s "$target" ]; then
+        rm -f "$target"
+    fi
+    return 0
+}
+trap cleanup_partial EXIT
+
 log "dumping ${DB_NAME} -> ${target}"
 # -Fc = custom format: compressed, and restorable table-by-table.
-pg_dump -h "$DB_HOST" -U "$DB_USER" -Fc "$DB_NAME" > "$target"
+pg_dump "${conn_args[@]}" -Fc "$DB_NAME" > "$target"
 chmod 600 "$target"
 
 # A dump that cannot be listed cannot be restored. Fail loudly now rather than

@@ -5,8 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
-		"build:app": "BUILD_TARGET=app vite build --mode app",
+		"build": "npm run icons:check && vite build",
+		"build:app": "npm run icons:check && BUILD_TARGET=app vite build --mode app",
 		"icons": "node scripts/make-icons.mjs",
 		"fonts": "node scripts/fetch-fonts.mjs",
 		"android:fit": "node scripts/android-fit.mjs",
@@ -15,10 +15,11 @@
 		"cap:android": "npm run build:app && cap sync android && npm run android:fit && npm run android:assets && cap open android",
 		"apk:debug": "npm run build:app && cap sync android && npm run android:fit && npm run android:assets && cd android && ./gradlew assembleDebug",
 		"preview": "vite preview",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check": "npm run icons:check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
-		"format": "prettier --write ."
+		"format": "prettier --write .",
+		"icons:check": "node scripts/check-icons.mjs"
 	},
 	"devDependencies": {
 		"@capacitor/android": "^7.6.7",

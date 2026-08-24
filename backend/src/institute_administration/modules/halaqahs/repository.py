@@ -6,9 +6,11 @@ display names, and compute the live student count with a correlated subquery.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +21,10 @@ from institute_administration.modules.halaqahs.domain import (
     HalaqahRepository,
     HalaqahView,
     InvalidHalaqahRelationError,
+    InvalidHalaqahTeacherError,
+    TeacherBrief,
 )
-from institute_administration.modules.halaqahs.models import HalaqahModel
+from institute_administration.modules.halaqahs.models import HalaqahModel, HalaqahTeacherModel
 from institute_administration.modules.identity.models import UserModel
 from institute_administration.modules.students.models import StudentModel
 from institute_administration.modules.teachers.models import TeacherModel
@@ -33,6 +37,14 @@ _student_count = (
     .correlate(HalaqahModel)
     .scalar_subquery()
 )
+
+
+def _is_member(teacher_id: UUID) -> Any:
+    """SQL predicate: this halaqah has the given teacher among its members."""
+    return exists().where(
+        HalaqahTeacherModel.halaqah_id == HalaqahModel.id,
+        HalaqahTeacherModel.teacher_id == teacher_id,
+    )
 
 
 def _entity(model: HalaqahModel) -> Halaqah:
@@ -62,6 +74,7 @@ def _view(
     type_name: str,
     count: int,
     time_model: TimeModel | None = None,
+    teachers: tuple[TeacherBrief, ...] = (),
 ) -> HalaqahView:
     return HalaqahView(
         id=model.id,
@@ -70,6 +83,9 @@ def _view(
         age=model.age,
         teacher_id=model.teacher_id,
         teacher_name=teacher_name,
+        # Fall back to the responsible teacher alone: a halaqah always has at least
+        # them, and a view built before membership was loaded must not look empty.
+        teachers=teachers or (TeacherBrief(id=model.teacher_id, name=teacher_name),),
         halaqah_type_id=model.halaqah_type_id,
         halaqah_type_name=type_name,
         time_id=model.time_id,
@@ -101,6 +117,85 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
             .outerjoin(TimeModel, HalaqahModel.time_id == TimeModel.id)
         )
 
+    async def _load_teachers(
+        self, halaqah_ids: Sequence[UUID]
+    ) -> dict[UUID, tuple[TeacherBrief, ...]]:
+        """Membership for a page of halaqahs in one query, responsible teacher first."""
+        if not halaqah_ids:
+            return {}
+        result = await self._session.execute(
+            select(
+                HalaqahTeacherModel.halaqah_id,
+                TeacherModel.id,
+                UserModel.full_name,
+                HalaqahModel.teacher_id,
+            )
+            .join(TeacherModel, HalaqahTeacherModel.teacher_id == TeacherModel.id)
+            .join(UserModel, TeacherModel.user_id == UserModel.id)
+            .join(HalaqahModel, HalaqahTeacherModel.halaqah_id == HalaqahModel.id)
+            .where(HalaqahTeacherModel.halaqah_id.in_(halaqah_ids))
+            .order_by(UserModel.full_name.collate(self._order_collation))
+        )
+        grouped: dict[UUID, list[tuple[bool, TeacherBrief]]] = {}
+        for halaqah_id, teacher_id, name, responsible_id in result.all():
+            grouped.setdefault(halaqah_id, []).append(
+                (teacher_id == responsible_id, TeacherBrief(id=teacher_id, name=name))
+            )
+        # Responsible first, then the rest alphabetically (already ordered by the query).
+        return {
+            hid: tuple(brief for _, brief in sorted(rows, key=lambda r: not r[0]))
+            for hid, rows in grouped.items()
+        }
+
+    async def _sync_membership(self, halaqah_id: UUID, responsible_id: UUID) -> None:
+        """Guarantee the responsible teacher is a member.
+
+        Called after every create and update: changing a halaqah's responsible
+        teacher must grant that teacher access, or an admin could reassign a halaqah
+        to someone who then cannot open it.
+        """
+        exists = await self._session.execute(
+            select(HalaqahTeacherModel.teacher_id).where(
+                HalaqahTeacherModel.halaqah_id == halaqah_id,
+                HalaqahTeacherModel.teacher_id == responsible_id,
+            )
+        )
+        if exists.scalar_one_or_none() is None:
+            self._session.add(HalaqahTeacherModel(halaqah_id=halaqah_id, teacher_id=responsible_id))
+            await self._session.flush()
+
+    async def set_teachers(self, halaqah_id: UUID, teacher_ids: Sequence[UUID]) -> None:
+        model = await self._session.get(HalaqahModel, halaqah_id)
+        if model is None:  # pragma: no cover - guarded by the service layer
+            return
+        # The responsible teacher is not removable through this path — dropping them
+        # would leave the halaqah's printed report naming someone with no access.
+        wanted = {model.teacher_id, *teacher_ids}
+        current = set(
+            (
+                await self._session.execute(
+                    select(HalaqahTeacherModel.teacher_id).where(
+                        HalaqahTeacherModel.halaqah_id == halaqah_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for teacher_id in current - wanted:
+            await self._session.execute(
+                delete(HalaqahTeacherModel).where(
+                    HalaqahTeacherModel.halaqah_id == halaqah_id,
+                    HalaqahTeacherModel.teacher_id == teacher_id,
+                )
+            )
+        for teacher_id in wanted - current:
+            self._session.add(HalaqahTeacherModel(halaqah_id=halaqah_id, teacher_id=teacher_id))
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:  # a teacher_id that does not exist
+            raise InvalidHalaqahTeacherError from exc
+
     async def add(self, halaqah: Halaqah) -> None:
         self._session.add(
             HalaqahModel(
@@ -114,6 +209,7 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
             )
         )
         await self._flush()
+        await self._sync_membership(halaqah.id, halaqah.teacher_id)
 
     async def update(self, halaqah: Halaqah) -> None:
         model = await self._session.get(HalaqahModel, halaqah.id)
@@ -126,6 +222,7 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
         model.age = halaqah.age
         model.time_id = halaqah.time_id
         await self._flush()
+        await self._sync_membership(halaqah.id, halaqah.teacher_id)
 
     async def get_entity(self, halaqah_id: UUID) -> Halaqah | None:
         model = await self._session.get(HalaqahModel, halaqah_id)
@@ -136,29 +233,48 @@ class SqlAlchemyHalaqahRepository(HalaqahRepository):
             self._view_select().where(HalaqahModel.id == halaqah_id)
         )
         row = result.first()
-        return _view(row[0], row[1], row[2], row[3], row[4]) if row else None
+        if row is None:
+            return None
+        teachers = await self._load_teachers([halaqah_id])
+        return _view(row[0], row[1], row[2], row[3], row[4], teachers.get(halaqah_id, ()))
 
     async def list_views(self, page: Page, *, teacher_id: UUID | None = None) -> list[HalaqahView]:
         stmt = self._view_select()
         if teacher_id is not None:
-            stmt = stmt.where(HalaqahModel.teacher_id == teacher_id)
+            # Membership, not responsibility: a teacher assigned to a halaqah they do
+            # not lead must still find it in their list.
+            stmt = stmt.where(_is_member(teacher_id))
         result = await self._session.execute(
             stmt.order_by(HalaqahModel.name.collate(self._order_collation))
             .limit(page.limit)
             .offset(page.offset)
         )
-        return [_view(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]
+        rows = result.all()
+        teachers = await self._load_teachers([row[0].id for row in rows])
+        return [
+            _view(row[0], row[1], row[2], row[3], row[4], teachers.get(row[0].id, ()))
+            for row in rows
+        ]
 
     async def count(self, *, teacher_id: UUID | None = None) -> int:
         stmt = select(func.count()).select_from(HalaqahModel)
         if teacher_id is not None:
-            stmt = stmt.where(HalaqahModel.teacher_id == teacher_id)
+            stmt = stmt.where(_is_member(teacher_id))
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
 
     async def ids_for_teacher(self, teacher_id: UUID) -> set[UUID]:
+        """The single source of truth for what a teacher may reach.
+
+        Every scoped endpoint in the app — students, daily records, analytics,
+        parent summons, upcoming exams — filters on the set this returns, so
+        reading it from the membership table is the whole of the many-to-many
+        change as far as access control is concerned.
+        """
         result = await self._session.execute(
-            select(HalaqahModel.id).where(HalaqahModel.teacher_id == teacher_id)
+            select(HalaqahTeacherModel.halaqah_id).where(
+                HalaqahTeacherModel.teacher_id == teacher_id
+            )
         )
         return set(result.scalars().all())
 

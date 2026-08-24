@@ -17,7 +17,7 @@ export const ATTITUDE_OPTIONS: { value: Attitude; label: string }[] = [
 	{ value: 1, label: 'مشاغب' }
 ];
 
-export const ADDED_POINTS_OPTIONS = [0, 5, 10, 15, 20];
+export const ADDED_POINTS_OPTIONS = [0, 5, 10, 20, 25, 50, 100];
 
 export function ratingLabel(r: number | null | undefined): string {
 	return RATING_OPTIONS.find((o) => o.value === r)?.label ?? '—';
@@ -166,6 +166,33 @@ export function parseRevisions(text: string | null | undefined): RevisionRow[] {
 		if (part < 1 || part > 30) continue;
 		const half: RevisionHalf = m[2] === 'كله' ? 0 : m[2] === 'النصف الأول' ? 1 : 2;
 		rows.push({ part, half, success: m[3] === 'نجح' });
+	}
+	return rows;
+}
+
+// --- Structured revision for رشيدي students: مراحل (1..6) instead of أجزاء, no نصف. ---
+
+export interface RashidiRevisionRow {
+	stage: number; // 1..6
+	success: boolean;
+}
+
+/** Serialise رشيدي revision rows into the Arabic message saved to `revision_lesson`. */
+export function serializeRashidiRevisions(rows: RashidiRevisionRow[]): string | null {
+	if (rows.length === 0) return null;
+	return rows.map((r) => `المرحلة ${r.stage}: ${r.success ? 'نجح' : 'أخفق'}`).join('، ');
+}
+
+/** Best-effort parse of a stored رشيدي revision message back into editable rows. */
+export function parseRashidiRevisions(text: string | null | undefined): RashidiRevisionRow[] {
+	if (!text) return [];
+	const rows: RashidiRevisionRow[] = [];
+	for (const seg of text.split('،')) {
+		const m = seg.trim().match(/المرحلة\s+([٠-٩0-9]+)\s*:\s*(نجح|أخفق)/);
+		if (!m) continue;
+		const stage = westernNum(m[1]);
+		if (stage < 1 || stage > 6) continue;
+		rows.push({ stage, success: m[2] === 'نجح' });
 	}
 	return rows;
 }

@@ -3,6 +3,8 @@
 
 import { browser } from '$app/environment';
 import { env } from '$env/dynamic/public';
+import { MOCK_MODE } from '$lib/mock/config';
+import { mockDispatch } from '$lib/mock/server';
 import type { TokenResponse } from './types';
 
 // Web (adapter-node) resolves the API at runtime via $env/dynamic/public. The static
@@ -142,12 +144,31 @@ async function tryRefresh(): Promise<boolean> {
 	return true;
 }
 
+/** Small artificial delay so mock responses still exercise loading states. */
+function mockDelay(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 200));
+}
+
+async function mockRequest<T>(method: Method, path: string, body?: unknown): Promise<T> {
+	await mockDelay();
+	const { status, data } = await mockDispatch(method, path, body);
+	if (status === 204) return undefined as T;
+	if (status < 200 || status >= 300) {
+		const payload = data as { detail?: string } | null | undefined;
+		const detail = (payload && payload.detail) || `فشل الطلب (${status})`;
+		throw new ApiError(status, detail, data);
+	}
+	return data as T;
+}
+
 async function request<T>(
 	method: Method,
 	path: string,
 	body?: unknown,
 	isRetry = false
 ): Promise<T> {
+	if (MOCK_MODE) return mockRequest<T>(method, path, body);
+
 	const headers: Record<string, string> = {};
 	if (body !== undefined) headers['Content-Type'] = 'application/json';
 	const access = tokens.access;

@@ -12,11 +12,14 @@
 		ApiError,
 		halaqahsApi,
 		halaqahTypesApi,
+		scoringPresetsApi,
 		studentsApi,
 		teachersApi,
 		type Halaqah,
 		type OrphanStatus,
-		type Student
+		type ScoringPreset,
+		type Student,
+		type StudentType
 	} from '$lib/api';
 	import { ORPHAN_LABELS, formatDate } from '$lib/labels';
 	import { whatsappLink } from '$lib/utils';
@@ -48,6 +51,12 @@
 		if (link) window.open(link, '_blank', 'noopener');
 	}
 
+	const trackOptions = [
+		{ value: '', label: 'غير محدد' },
+		{ value: 'quran', label: 'قرآن' },
+		{ value: 'rashidi', label: 'رشيدي' }
+	];
+
 	const orphanOptions = [
 		{ value: '', label: 'غير يتيم' },
 		...(Object.keys(ORPHAN_LABELS) as OrphanStatus[]).map((value) => ({
@@ -58,6 +67,7 @@
 
 	let students = $state<Student[]>([]);
 	let halaqahs = $state<Halaqah[]>([]);
+	let presets = $state<ScoringPreset[]>([]);
 	let loading = $state(true);
 	let listError = $state('');
 	let search = $state('');
@@ -78,7 +88,9 @@
 		residential_area: '',
 		accepted_at: '',
 		notes: '',
-		halaqah_id: ''
+		halaqah_id: '',
+		student_type: '' as StudentType | '',
+		scoring_preset_id: ''
 	});
 	let form = $state(emptyForm());
 
@@ -208,6 +220,10 @@
 		{ value: '', label: 'بدون حلقة' },
 		...halaqahs.map((h) => ({ value: h.id, label: h.name }))
 	]);
+	let presetOptions = $derived([
+		{ value: '', label: 'إعدادات المعهد العامة' },
+		...presets.map((p) => ({ value: p.id, label: p.name }))
+	]);
 
 	let filtered = $derived(
 		students.filter((s) => {
@@ -244,12 +260,14 @@
 		loading = true;
 		listError = '';
 		try {
-			const [studentList, halaqahPage] = await Promise.all([
+			const [studentList, halaqahPage, presetList] = await Promise.all([
 				fetchAllStudents(),
-				halaqahsApi.list({ limit: 200 })
+				halaqahsApi.list({ limit: 200 }),
+				scoringPresetsApi.list()
 			]);
 			students = studentList;
 			halaqahs = halaqahPage.items;
+			presets = presetList.items;
 		} catch (err) {
 			listError = err instanceof ApiError ? err.message : 'تعذّر تحميل الطلاب.';
 		} finally {
@@ -280,7 +298,9 @@
 			residential_area: student.residential_area ?? '',
 			accepted_at: student.accepted_at ?? '',
 			notes: student.notes ?? '',
-			halaqah_id: student.halaqah_id ?? ''
+			halaqah_id: student.halaqah_id ?? '',
+			student_type: student.student_type ?? '',
+			scoring_preset_id: student.scoring_preset_id ?? ''
 		};
 		formError = '';
 		dialogOpen = true;
@@ -300,7 +320,9 @@
 			residential_area: form.residential_area || null,
 			accepted_at: form.accepted_at || null,
 			notes: form.notes || null,
-			halaqah_id: form.halaqah_id || null
+			halaqah_id: form.halaqah_id || null,
+			student_type: form.student_type || null,
+			scoring_preset_id: form.scoring_preset_id || null
 		};
 		try {
 			if (editing) {
@@ -468,6 +490,14 @@
 				<div class="space-y-2">
 					<Label>الحلقة</Label>
 					<Select bind:value={form.halaqah_id} options={halaqahOptions} placeholder="بدون حلقة" />
+				</div>
+				<div class="space-y-2">
+					<Label>نوع الطالب</Label>
+					<Select bind:value={form.student_type} options={trackOptions} />
+				</div>
+				<div class="space-y-2">
+					<Label>نظام تسعير النقاط</Label>
+					<Select bind:value={form.scoring_preset_id} options={presetOptions} />
 				</div>
 				<div class="space-y-2 sm:col-span-2">
 					<Label for="area">منطقة السكن</Label>

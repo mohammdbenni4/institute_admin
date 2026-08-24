@@ -69,6 +69,8 @@ _FIELD_LABELS: dict[str, str] = {
     "excuse_reason": "سبب الإذن",
     "exam_from": "التسميع من",
     "exam_to": "التسميع إلى",
+    "exam_from_line": "السطر من",
+    "exam_to_line": "السطر إلى",
     "exam_total": "العدد الكلي",
     "rating": "التقدير",
     "revision_lesson": "المراجعة",
@@ -86,6 +88,9 @@ _FIELD_LABELS: dict[str, str] = {
     "absent_points": "نقاط الغياب",
     "excused_points": "نقاط الإذن",
     "late_points": "نقاط التأخير",
+    # students
+    "student_type": "نوع الطالب",
+    "scoring_preset_id": "نظام تسعير النقاط",
     "subtitle": "العبارة تحت الاسم",
     "phone": "رقم المعهد",
     "logo_url": "الشعار",

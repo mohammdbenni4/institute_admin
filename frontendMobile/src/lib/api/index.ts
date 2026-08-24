@@ -7,6 +7,7 @@ export {
 	studentsApi,
 	dailyRecordsApi,
 	scoringApi,
+	scoringPresetsApi,
 	problemsApi,
 	parentSummonsApi,
 	upcomingExamsApi

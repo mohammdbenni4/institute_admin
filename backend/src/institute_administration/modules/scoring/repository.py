@@ -1,14 +1,20 @@
-"""Scoring settings infrastructure: SQLAlchemy repository."""
+"""Scoring infrastructure: SQLAlchemy repositories for the institute-wide
+settings row, the named presets, and the per-student policy resolver."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, fields
+from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from institute_administration.modules.daily_records.domain import DEFAULT_SCORING, ScoringPolicy
-from institute_administration.modules.scoring.models import ScoringSettingsModel
+from institute_administration.modules.scoring.models import ScoringPresetModel, ScoringSettingsModel
+from institute_administration.modules.students.models import StudentModel
+from institute_administration.shared.domain import ConflictError, EntityNotFoundError
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,12 @@ class ScoringSettings:
         )
 
 
+def _apply_settings(model: ScoringSettingsModel | ScoringPresetModel, s: ScoringSettings) -> None:
+    """Copy the fifteen weights onto either weights-carrying table."""
+    for name in (f.name for f in fields(ScoringSettings)):
+        setattr(model, name, getattr(s, name))
+
+
 def _to_settings(m: ScoringSettingsModel) -> ScoringSettings:
     return ScoringSettings(
         present_points=m.present_points,
@@ -116,20 +128,132 @@ class SqlAlchemyScoringSettingsRepository:
         if model is None:
             model = ScoringSettingsModel()
             self._session.add(model)
-        model.present_points = settings.present_points
-        model.rating_4_points = settings.rating_4_points
-        model.rating_3_points = settings.rating_3_points
-        model.rating_2_points = settings.rating_2_points
-        model.rating_1_points = settings.rating_1_points
-        model.revision_4_points = settings.revision_4_points
-        model.revision_3_points = settings.revision_3_points
-        model.revision_2_points = settings.revision_2_points
-        model.revision_1_points = settings.revision_1_points
-        model.attitude_3_points = settings.attitude_3_points
-        model.attitude_2_points = settings.attitude_2_points
-        model.attitude_1_points = settings.attitude_1_points
-        model.absent_points = settings.absent_points
-        model.excused_points = settings.excused_points
-        model.late_points = settings.late_points
+        _apply_settings(model, settings)
         await self._session.flush()
         return _to_settings(model)
+
+
+# --- Named presets ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ScoringPreset:
+    """A named set of weights, plus the identity a student is pinned to."""
+
+    id: UUID
+    name: str
+    settings: ScoringSettings
+
+
+_PRESET_FIELDS = tuple(f.name for f in fields(ScoringSettings))
+
+
+def _preset_settings(m: ScoringPresetModel) -> ScoringSettings:
+    return ScoringSettings(**{name: getattr(m, name) for name in _PRESET_FIELDS})
+
+
+def _to_preset(m: ScoringPresetModel) -> ScoringPreset:
+    return ScoringPreset(id=m.id, name=m.name, settings=_preset_settings(m))
+
+
+class DuplicatePresetNameError(ConflictError):
+    def __init__(self, message: str = "يوجد نظام تسعير آخر بنفس الاسم") -> None:
+        super().__init__(message)
+
+
+class ScoringPresetNotFoundError(EntityNotFoundError):
+    def __init__(self, message: str = "نظام تسعير النقاط غير موجود") -> None:
+        super().__init__(message)
+
+
+class SqlAlchemyScoringPresetRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list(self) -> list[ScoringPreset]:
+        result = await self._session.execute(
+            select(ScoringPresetModel).order_by(ScoringPresetModel.name)
+        )
+        return [_to_preset(m) for m in result.scalars()]
+
+    async def get(self, preset_id: UUID) -> ScoringPreset:
+        model = await self._session.get(ScoringPresetModel, preset_id)
+        if model is None:
+            raise ScoringPresetNotFoundError
+        return _to_preset(model)
+
+    async def create(self, name: str, settings: ScoringSettings) -> ScoringPreset:
+        model = ScoringPresetModel(name=name.strip())
+        _apply_settings(model, settings)
+        self._session.add(model)
+        await self._flush()
+        return _to_preset(model)
+
+    async def update(
+        self, preset_id: UUID, *, name: str, settings: ScoringSettings
+    ) -> ScoringPreset:
+        model = await self._session.get(ScoringPresetModel, preset_id)
+        if model is None:
+            raise ScoringPresetNotFoundError
+        model.name = name.strip()
+        _apply_settings(model, settings)
+        await self._flush()
+        return _to_preset(model)
+
+    async def delete(self, preset_id: UUID) -> None:
+        model = await self._session.get(ScoringPresetModel, preset_id)
+        if model is None:
+            raise ScoringPresetNotFoundError
+        # students.scoring_preset_id is ON DELETE SET NULL, so the students it priced
+        # simply fall back to the institute-wide settings.
+        await self._session.delete(model)
+        await self._session.flush()
+
+    async def _flush(self) -> None:
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:  # the only constraint is the unique name
+            raise DuplicatePresetNameError from exc
+
+
+class StudentScoringPolicyResolver:
+    """Answers "which weights price this student's card?".
+
+    A student pinned to a preset (``students.scoring_preset_id``) is scored by it;
+    everyone else by the institute-wide ``scoring_settings`` row. Both are loaded
+    at most once per request and cached, so a hundred-record bulk upload costs two
+    queries rather than two hundred.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._default: ScoringPolicy | None = None
+        self._by_student: dict[UUID, ScoringPolicy] = {}
+
+    async def _fallback(self) -> ScoringPolicy:
+        if self._default is None:
+            self._default = await SqlAlchemyScoringSettingsRepository(self._session).get_policy()
+        return self._default
+
+    async def prime(self, student_ids: Sequence[UUID]) -> None:
+        """Load the presets for a batch of students in a single query."""
+        unknown = [sid for sid in set(student_ids) if sid not in self._by_student]
+        if not unknown:
+            return
+        result = await self._session.execute(
+            select(StudentModel.id, ScoringPresetModel)
+            .join(ScoringPresetModel, StudentModel.scoring_preset_id == ScoringPresetModel.id)
+            .where(StudentModel.id.in_(unknown))
+        )
+        priced = {}
+        for student_id, preset in result.all():
+            priced[student_id] = _preset_settings(preset).to_policy()
+        fallback = await self._fallback()
+        # Cache the misses too: a student with no preset must not re-query on every record.
+        for sid in unknown:
+            self._by_student[sid] = priced.get(sid, fallback)
+
+    async def for_student(self, student_id: UUID) -> ScoringPolicy:
+        if student_id not in self._by_student:
+            await self.prime([student_id])
+        return self._by_student[student_id]

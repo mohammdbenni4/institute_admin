@@ -21,6 +21,7 @@ from institute_administration.modules.students.schemas import (
     StudentImportResponse,
     StudentListResponse,
     StudentResponse,
+    StudentTrackUpdateRequest,
     StudentUpdateRequest,
 )
 from institute_administration.modules.students.service import (
@@ -123,6 +124,32 @@ async def update(
     data = payload.model_dump(exclude_unset=True)
     student = await service.update(student_id, UpdateStudentInput(**data))
     return StudentResponse.from_entity(student)
+
+
+@router.patch(
+    "/{student_id}/track",
+    response_model=StudentResponse,
+    summary="تعديل نوع الطالب ونظام تسعير نقاطه",
+)
+async def update_track(
+    student_id: UUID,
+    payload: StudentTrackUpdateRequest,
+    service: ServiceDep,
+    scope: ScopeDep,
+) -> StudentResponse:
+    """Set a student's مسار and نظام تسعير النقاط — allowed to their own teacher.
+
+    Scoped exactly like the read endpoints: a teacher reaches only students in the
+    halaqahs they lead, and a student outside that set is reported as not found
+    rather than forbidden, so the endpoint never confirms a student exists to
+    someone who cannot see them.
+    """
+    student = await service.get(student_id)
+    if not scope.allows_halaqah(student.halaqah_id):
+        raise StudentNotFoundError
+    data = payload.model_dump(exclude_unset=True)
+    updated = await service.update(student_id, UpdateStudentInput(**data))
+    return StudentResponse.from_entity(updated)
 
 
 @router.delete(
