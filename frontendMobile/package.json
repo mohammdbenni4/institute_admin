@@ -1,7 +1,7 @@
 {
 	"name": "institute-administration-teacher-mobile",
-	"version": "3.0.0-final",
-	"androidVersionCode": 5,
+	"version": "3.0.0-final2",
+	"androidVersionCode": 6,
 	"private": true,
 	"type": "module",
 	"scripts": {
