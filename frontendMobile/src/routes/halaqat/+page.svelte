@@ -68,6 +68,14 @@
 			{/each}
 		</ul>
 	{/if}
+
+	<!-- Version, at the very end of the page so it never competes with anything: it sits
+	     after the last halaqah card, inside the padding that already clears the bottom
+	     nav. Rendered in every state (including the error one) so a teacher can always
+	     read their build out during support. -->
+	<p class="pt-6 text-center text-[10px] text-on-surface-variant/40" dir="ltr">
+		v{__APP_VERSION__}
+	</p>
 </main>
 
 <BottomNav />

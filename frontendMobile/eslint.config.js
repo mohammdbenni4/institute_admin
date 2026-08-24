@@ -13,7 +13,13 @@ export default [
 	prettier,
 	{
 		languageOptions: {
-			globals: { ...globals.browser, ...globals.node }
+			globals: {
+				...globals.browser,
+				...globals.node,
+				// Injected by Vite's `define` (see vite.config.ts); declared for TypeScript
+				// in src/app.d.ts, which ESLint does not read.
+				__APP_VERSION__: 'readonly'
+			}
 		}
 	},
 	{

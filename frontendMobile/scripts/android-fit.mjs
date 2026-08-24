@@ -10,6 +10,11 @@
 //   2. Install the ReportPrinter plugin and register it with MainActivity. Android's
 //      WebView has no `window.print()`, so without this the report export button does
 //      nothing at all on the phone (see native/android/ReportPrinter.java).
+//   3. Stamp the version from package.json onto build.gradle. Regenerating `android/`
+//      resets it to Capacitor's default `1` / `"1.0"`, and a versionCode that does not
+//      increase makes Android refuse the update — this used to have to be remembered
+//      by hand on every rebuild. package.json is now the single source of truth, which
+//      also keeps the number shown inside the app identical to the one Android shows.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -143,6 +148,38 @@ function patchPrinter() {
 	console.log(`  ReportPrinter: ${parts.join(', ')}, registered in MainActivity.`);
 }
 
+// ----------------------------------------------------------------- 3. version ---
+
+function patchVersion() {
+	const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+	const versionName = pkg.version;
+	const versionCode = pkg.androidVersionCode;
+	if (!versionName || !Number.isInteger(versionCode)) {
+		console.error(
+			'android-fit: package.json needs a "version" string and an integer "androidVersionCode".'
+		);
+		process.exit(1);
+	}
+
+	const path = join(ANDROID, 'app/build.gradle');
+	if (!existsSync(path)) {
+		console.error('android-fit: app/build.gradle not found.');
+		process.exit(1);
+	}
+	let gradle = readFileSync(path, 'utf8');
+	const before = gradle;
+	gradle = gradle.replace(/versionCode\s+\d+/, `versionCode ${versionCode}`);
+	gradle = gradle.replace(/versionName\s+"[^"]*"/, `versionName "${versionName}"`);
+
+	if (!/versionCode\s+\d+/.test(gradle) || !/versionName\s+"[^"]*"/.test(gradle)) {
+		console.error('android-fit: could not find versionCode/versionName in app/build.gradle.');
+		process.exit(1);
+	}
+	if (gradle !== before) writeFileSync(path, gradle);
+	console.log(`  version: versionCode ${versionCode}, versionName "${versionName}".`);
+}
+
 console.log('android-fit: applying native patches…');
 patchStyles();
 patchPrinter();
+patchVersion();
