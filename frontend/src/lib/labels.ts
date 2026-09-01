@@ -102,6 +102,12 @@ function recordRange(record: {
 /**
  * How many *distinct* pages a student covered over a set of records.
  *
+ * **Revision is never counted here.** المراجعة lives in its own column and is only
+ * ever text — «الجزء ٣٠ (كله): نجح» for a قرآن student, «المرحلة ٢: نجح» for a رشيدي
+ * one — so it carries no page range at all. The parameter type below deliberately
+ * accepts only the two exam columns, which makes it structurally impossible for a
+ * revision to reach this count, now or after any future edit.
+ *
  * Deliberately not a sum. Teachers drill the same page for days at a time —
  * مؤيد recited pages 39–41 across ten sessions, repeating page 40 six times — so
  * adding the daily counts printed «من 39 إلى 41 · المجموع 10 صفحة», a line that
