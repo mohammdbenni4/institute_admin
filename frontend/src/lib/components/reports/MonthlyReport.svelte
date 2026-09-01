@@ -14,6 +14,7 @@
 	// isolates `#print-report`, and inline rules survive without depending on the
 	// app's own cascade.
 	import type { DailyRecord, InstituteSettings, Student } from '$lib/api';
+	import { totalRecordPages } from '$lib/labels';
 	import {
 		levantDate,
 		periodLabel,
@@ -69,9 +70,7 @@
 			absent,
 			examFrom: froms.length ? Math.min(...froms) : null,
 			examTo: tos.length ? Math.max(...tos) : null,
-			// Page counts are fractional now, so round the sum: adding floats can leave
-			// artefacts like 2.5000000000000004 on a printed report.
-			examTotal: Math.round(records.reduce((s, r) => s + (r.exam_total ?? 0), 0) * 100) / 100,
+			examTotal: totalRecordPages(records),
 			points: records.reduce((s, r) => s + r.total_points, 0)
 		};
 	});

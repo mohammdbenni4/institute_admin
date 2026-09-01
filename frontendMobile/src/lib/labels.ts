@@ -205,3 +205,42 @@ export function recordSummary(r: DailyRecord): string {
 	bits.push(`${r.total_points} نقطة`);
 	return bits.join(' · ');
 }
+
+/**
+ * How many pages one daily record covers («العدد الكلي» for that day).
+ *
+ * `exam_total` is what the teacher typed and it always wins when present — it is the
+ * only way a fraction can be expressed («نصف صفحة» = 0.5), and 42 records in August
+ * alone carry one.
+ *
+ * But that field is optional, and in practice teachers fill in the page range and
+ * leave it blank: 1104 of 2491 recitation records in August 2026 had no `exam_total`.
+ * Summing only the records that carried one made every report understate the month —
+ * a student with 15 recorded days and pages 51→66 printed a total of «4 صفحة». So when
+ * it is missing, fall back to the range the teacher *did* record.
+ */
+export function recordPages(record: {
+	exam_from: number | null;
+	exam_to: number | null;
+	exam_total: number | null;
+}): number {
+	if (record.exam_total != null) return record.exam_total;
+	if (record.exam_from != null && record.exam_to != null) {
+		// Inclusive — «من 54 إلى 55» is two pages, not one. A reversed range is bad data
+		// rather than negative progress, so it contributes nothing instead of subtracting.
+		return record.exam_to >= record.exam_from ? record.exam_to - record.exam_from + 1 : 0;
+	}
+	// Only one end of the range was recorded: a single page was recited.
+	if (record.exam_from != null || record.exam_to != null) return 1;
+	return 0;
+}
+
+/**
+ * Total pages across many records. Rounded to two decimals because adding halves as
+ * floats leaves artefacts like 2.5000000000000004, which would be printed verbatim.
+ */
+export function totalRecordPages(
+	records: { exam_from: number | null; exam_to: number | null; exam_total: number | null }[]
+): number {
+	return Math.round(records.reduce((sum, r) => sum + recordPages(r), 0) * 100) / 100;
+}

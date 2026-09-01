@@ -7,7 +7,7 @@
 // bundle.
 
 import type { DailyRecord, Student } from '$lib/api';
-import { attitudeLabel, formatDate, ratingLabel } from '$lib/labels';
+import { attitudeLabel, formatDate, ratingLabel, totalRecordPages } from '$lib/labels';
 import { periodBounds, type ReportPeriod, type ReportSections } from './options';
 
 function attendanceLabel(r: DailyRecord): string {
@@ -41,8 +41,7 @@ function summarySheet(
 		const tos = records.map((r) => r.exam_to).filter((v): v is number => v != null);
 		row['التسميع من'] = froms.length ? Math.min(...froms) : '';
 		row['التسميع إلى'] = tos.length ? Math.max(...tos) : '';
-		row['العدد الكلي'] =
-			Math.round(records.reduce((s, r) => s + (r.exam_total ?? 0), 0) * 100) / 100;
+		row['العدد الكلي'] = totalRecordPages(records);
 	}
 	if (sections.points) {
 		row['مجموع النقاط'] = records.reduce((s, r) => s + r.total_points, 0);
