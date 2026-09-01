@@ -7,7 +7,7 @@
 // bundle.
 
 import type { DailyRecord, Student } from '$lib/api';
-import { attitudeLabel, formatDate, ratingLabel, totalRecordPages } from '$lib/labels';
+import { attitudeLabel, formatDate, pagesCovered, ratingLabel, recitedRange } from '$lib/labels';
 import { periodBounds, type ReportPeriod, type ReportSections } from './options';
 
 function attendanceLabel(r: DailyRecord): string {
@@ -37,11 +37,10 @@ function summarySheet(
 	}
 	if (sections.late) row['التأخير'] = records.filter((r) => r.late).length;
 	if (sections.recitation) {
-		const froms = records.map((r) => r.exam_from).filter((v): v is number => v != null);
-		const tos = records.map((r) => r.exam_to).filter((v): v is number => v != null);
-		row['التسميع من'] = froms.length ? Math.min(...froms) : '';
-		row['التسميع إلى'] = tos.length ? Math.max(...tos) : '';
-		row['العدد الكلي'] = totalRecordPages(records);
+		const range = recitedRange(records);
+		row['التسميع من'] = range.from ?? '';
+		row['التسميع إلى'] = range.to ?? '';
+		row['العدد الكلي'] = pagesCovered(records);
 	}
 	if (sections.points) {
 		row['مجموع النقاط'] = records.reduce((s, r) => s + r.total_points, 0);

@@ -4,7 +4,7 @@
 	// The actual "export" is the browser's print dialog (→ "Save as PDF") over a
 	// dedicated #print-report container — see the `@media print` rules in app.css.
 	import { repo } from '$lib/offline';
-	import { attitudeLabel, ratingLabel, recordPages } from '$lib/labels';
+	import { attitudeLabel, pagesCovered, ratingLabel, recitedRange } from '$lib/labels';
 	import { formatDateArabic, formatMonthArabic, todayIso } from '$lib/utils';
 	import { cn } from '$lib/utils';
 	import { isNativeApp, printReport, reportFileName, shareReportPdf } from '$lib/print';
@@ -93,12 +93,16 @@
 			} else {
 				stats.absentCount++;
 			}
-			if (stats.examFrom == null && r.exam_from != null) stats.examFrom = r.exam_from;
-			if (r.exam_to != null) stats.examTo = r.exam_to;
-			stats.totalPages += recordPages(r);
 			stats.totalPoints += r.total_points;
 			if (r.notes) stats.lastNote = r.notes;
 		}
+		// Range and page count describe the whole period, so they are derived from the
+		// full set rather than accumulated row by row — accumulating gave the *first*
+		// record's «من» and the *last* record's «إلى», which printed «من 56 إلى 41».
+		const range = recitedRange(records);
+		stats.examFrom = range.from;
+		stats.examTo = range.to;
+		stats.totalPages = pagesCovered(records);
 		return stats;
 	}
 

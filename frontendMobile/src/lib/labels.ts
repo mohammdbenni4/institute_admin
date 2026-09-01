@@ -206,41 +206,76 @@ export function recordSummary(r: DailyRecord): string {
 	return bits.join(' · ');
 }
 
-/**
- * How many pages one daily record covers («العدد الكلي» for that day).
- *
- * `exam_total` is what the teacher typed and it always wins when present — it is the
- * only way a fraction can be expressed («نصف صفحة» = 0.5), and 42 records in August
- * alone carry one.
- *
- * But that field is optional, and in practice teachers fill in the page range and
- * leave it blank: 1104 of 2491 recitation records in August 2026 had no `exam_total`.
- * Summing only the records that carried one made every report understate the month —
- * a student with 15 recorded days and pages 51→66 printed a total of «4 صفحة». So when
- * it is missing, fall back to the range the teacher *did* record.
- */
-export function recordPages(record: {
+/** One record's page range as `[first, last]`, or null when it recorded no recitation. */
+function recordRange(record: {
 	exam_from: number | null;
 	exam_to: number | null;
-	exam_total: number | null;
-}): number {
-	if (record.exam_total != null) return record.exam_total;
-	if (record.exam_from != null && record.exam_to != null) {
-		// Inclusive — «من 54 إلى 55» is two pages, not one. A reversed range is bad data
-		// rather than negative progress, so it contributes nothing instead of subtracting.
-		return record.exam_to >= record.exam_from ? record.exam_to - record.exam_from + 1 : 0;
+}): [number, number] | null {
+	const { exam_from: from, exam_to: to } = record;
+	if (from != null && to != null) {
+		// A reversed range is a typo, not backwards progress. Trust «من», which is the
+		// field the teacher fills first, and ignore the impossible «إلى».
+		return to >= from ? [from, to] : [from, from];
 	}
-	// Only one end of the range was recorded: a single page was recited.
-	if (record.exam_from != null || record.exam_to != null) return 1;
-	return 0;
+	if (from != null) return [from, from];
+	if (to != null) return [to, to];
+	return null;
 }
 
 /**
- * Total pages across many records. Rounded to two decimals because adding halves as
- * floats leaves artefacts like 2.5000000000000004, which would be printed verbatim.
+ * How many *distinct* pages a student covered over a set of records.
+ *
+ * Deliberately not a sum. Teachers drill the same page for days at a time —
+ * مؤيد recited pages 39–41 across ten sessions, repeating page 40 six times — so
+ * adding the daily counts printed «من 39 إلى 41 · المجموع 10 صفحة», a line that
+ * contradicts itself. Counting each page once makes the total mean progress
+ * («how far did the student get») and guarantees it can never exceed the range
+ * shown beside it.
+ *
+ * `exam_total` is deliberately ignored here: it is a per-day count and cannot say
+ * *which* pages were involved. It still drives the daily rows, and no record in
+ * the database carries one without also carrying a range, so nothing is lost.
+ * The one thing this cannot express is a half page — a student who recited only
+ * «نصف صفحة» of page 10 counts as having covered that page.
  */
-export function totalRecordPages(
-	records: { exam_from: number | null; exam_to: number | null; exam_total: number | null }[]
+export function pagesCovered(
+	records: { exam_from: number | null; exam_to: number | null }[]
 ): number {
-	return Math.round(records.reduce((sum, r) => sum + recordPages(r), 0) * 100) / 100;
+	const pages = new Set<number>();
+	for (const record of records) {
+		const range = recordRange(record);
+		if (!range) continue;
+		const [first, last] = range;
+		// The mushaf is 604 pages; anything wider is bad data, so count only its start
+		// rather than inflating the total with hundreds of pages nobody recited.
+		if (last - first > 604) {
+			pages.add(first);
+			continue;
+		}
+		for (let page = first; page <= last; page++) pages.add(page);
+	}
+	return pages.size;
+}
+
+/**
+ * The span of pages touched in the period, as `من … إلى …`.
+ *
+ * Min and max — *not* the first and last record. Ordering by date printed
+ * «من 56 إلى 41» for a student whose first session happened to start high and
+ * whose last one ended low, and hid that another student had gone back to page 23
+ * by showing «من 30 إلى 31».
+ */
+export function recitedRange(records: { exam_from: number | null; exam_to: number | null }[]): {
+	from: number | null;
+	to: number | null;
+} {
+	let from: number | null = null;
+	let to: number | null = null;
+	for (const record of records) {
+		const range = recordRange(record);
+		if (!range) continue;
+		if (from == null || range[0] < from) from = range[0];
+		if (to == null || range[1] > to) to = range[1];
+	}
+	return { from, to };
 }

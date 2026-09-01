@@ -14,7 +14,7 @@
 	// isolates `#print-report`, and inline rules survive without depending on the
 	// app's own cascade.
 	import type { DailyRecord, InstituteSettings, Student } from '$lib/api';
-	import { totalRecordPages } from '$lib/labels';
+	import { pagesCovered, recitedRange } from '$lib/labels';
 	import {
 		levantDate,
 		periodLabel,
@@ -61,16 +61,15 @@
 		const late = records.filter((r) => r.late).length; // subset of present
 		const excused = records.filter((r) => !r.present && r.excused).length;
 		const absent = records.filter((r) => !r.present && !r.excused).length;
-		const froms = records.map((r) => r.exam_from).filter((v): v is number => v != null);
-		const tos = records.map((r) => r.exam_to).filter((v): v is number => v != null);
+		const range = recitedRange(records);
 		return {
 			present,
 			late,
 			excused,
 			absent,
-			examFrom: froms.length ? Math.min(...froms) : null,
-			examTo: tos.length ? Math.max(...tos) : null,
-			examTotal: totalRecordPages(records),
+			examFrom: range.from,
+			examTo: range.to,
+			examTotal: pagesCovered(records),
 			points: records.reduce((s, r) => s + r.total_points, 0)
 		};
 	});
